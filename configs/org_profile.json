@@ -1,0 +1,46 @@
+{
+  "schema": "paper_trader.org_profile.v1",
+  "profile": "aggressive_growth_research",
+  "real_trading": false,
+  "objective": "maximize paper-research discovery velocity and upside capture while keeping all outputs non-executing and clearly labeled",
+  "recommendation": {
+    "candidate_threshold": 60,
+    "research_candidate_threshold": 62,
+    "research_weighted_consensus_min": 1.5,
+    "research_excess_win_min": 45,
+    "allow_aggressive_research_candidate": true
+  },
+  "strategy": {
+    "target_active": 7,
+    "max_promote": 4,
+    "high_upside_slots": 4,
+    "high_return_quota": 8,
+    "data_only_ratio": 0.3,
+    "validation_first_coverage_pct": 25,
+    "validation_first_strategy_limit": 8,
+    "validation_first_high_return_quota": 1,
+    "validation_first_data_only_ratio": 0.2,
+    "validation_first_current_recommendation_batch": 420,
+    "validation_first_symbol_limit": 24,
+    "validation_first_logic_limit": 14,
+    "validation_first_repeat_threshold": 3,
+    "validation_first_repeat_strategy_limit": 2,
+    "validation_first_repeat_high_return_quota": 0,
+    "validation_first_repeat_data_only_ratio": 0.1,
+    "validation_first_discovery_batch": 1200,
+    "validation_first_repeat_current_recommendation_batch": 700,
+    "validation_first_repeat_symbol_limit": 32,
+    "validation_first_repeat_logic_limit": 18
+  },
+  "discovery": {
+    "max_new": 24,
+    "per_run_floor": 24,
+    "discovery_validation_batch": 900
+  },
+  "safety": {
+    "external_publish": false,
+    "copy_trading": false,
+    "broker_sync": false,
+    "order_routing": false
+  }
+}

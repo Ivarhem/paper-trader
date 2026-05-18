@@ -1,0 +1,345 @@
+organization:
+  name: paper_trader_research_org
+  mode: deterministic_micro_agent_pipeline
+  safety_boundary: historical_and_paper_research_only
+  orchestrator: tools/agents/research_pipeline_agent.py
+  state:
+    database: paper_trader.db
+    latest_outputs: /tmp/*_latest.json
+  principles:
+  - No real trading/orders or brokerage integration.
+  - Prefer reproducible rules over free-form LLM decisions for scheduled runs.
+  - Every agent writes a JSON contract with status, metrics, warnings, and next actions.
+  - Recommendation support and risk/trade eligibility are separate decisions.
+  - Under-validated ideas should become research_watch, not fake approvals.
+  - Read sub-organization compact summaries before opening full debug artifacts.
+agent_groups:
+  data_ingestion:
+    mission: Keep universe, prices, disclosures, and financial snapshots fresh.
+    agents:
+    - pipeline_smoke_check
+    - universe_discovery
+    - daily_price_refresh
+    - smbs_fx_import
+    - opendart_disclosures
+    - sec_edgar_disclosures
+    - disclosure_impact
+    - universe_curator
+    - disclosure_impact_recommendations
+    - opendart_financials
+    - data_quality
+    - common_universe
+  strategy_research:
+    mission: Generate, validate, de-duplicate, promote, and tier strategy hypotheses.
+    agents:
+    - strategy_generator
+    - capacity_planner
+    - simulation_validation_worker
+    - discovery_validation
+    - strategy_novelty_pruner
+    - strategy_lifecycle
+    - active_strategy_balancer
+    - strategy_tail_risk_filter
+    - strategy_success_optimizer
+    - recommendation_audit
+    - outcome_attribution
+    - audit_tail_quarantine_scout
+    - positive_cohort_scout
+    - exit_policy_optimizer
+    - short_horizon_profit_profile
+    - strategy_context_router
+    - strategy_context_outcome_ledger
+    - target_return_adjustment_evaluator
+  market_context:
+    mission: Add cross-market, issue, and news context without creating direct trade
+      signals.
+    agents:
+    - market_context
+    - market_mover_seed
+    - investor_flow_seed
+    - market_shock_mover_scout
+    - supply_close_strength_scout
+    - theme_spillover_backtest
+    - market_issue_scout
+    - market_route_audit
+    - kr_entry_signal_scout
+    - kr_multi_evidence_signal_scout
+    - market_news_issue_scout
+    - market_issue_narrative
+    - market_regime_gate
+    - recommendation_market_context
+  recommendation_committee:
+    mission: Produce current paper recommendations, critique them, and split research
+      support from risk eligibility.
+    agents:
+    - recommendation_agent
+    - recommendation_agent_after_disclosure
+    - recommendation_critic
+    - portfolio_risk_manager
+    - investment_committee
+    - oversold_recovery
+    - shadow_recommendations
+    - internal_signal_board
+    - alpha_fast_lane
+    - current_recommendation_validation
+    - committee_performance_ledger
+    - recommendation_outcome_tracker
+    - recommendation_funnel
+    - recommendation_calibration
+    - supply_weight_evaluator
+    - fund_recommendation_consensus
+  meta_governance:
+    mission: Audit the research organization, detect stale/ineffective gates, and
+      suggest safe improvements.
+    agents:
+    - org_evaluator
+    - org_improvement_guardian
+    - research_hypothesis
+    - experiment_spec_compiler
+    - experiment_planner
+    - experiment_runner
+    - evidence_judge
+    - research_experiment_ledger
+    - research_org_orchestrator
+    - experiment_escalation
+    - us_route_eligibility
+    - paper_trader_integrity
+    - org_architecture_review
+  fund_research:
+    mission: Simulate, replay, register, score, and risk-check paper fund strategies
+      as managed research units.
+    agents:
+    - paper_fund_simulator
+    - paper_fund_historical_replay
+    - paper_fund_price_replay
+    - fund_registry
+    - fund_performance_evaluator
+    - fund_risk_guardian
+    - fund_consensus
+  compact_interfaces:
+    mission: Provide token-efficient department contracts and research queues for
+      UI, agents, and LLM review flows.
+    agents:
+    - suborg_summary
+key_agent_contracts:
+  recommendation_agent:
+    script: tools/agents/recommendation_agent.py
+    output: /tmp/recommendations_latest.json
+    role: Current paper recommendation generation and ranking.
+    policy:
+    - Sort by recommendation usefulness, not raw excitement.
+    - Use disclosure impact assessments before hard-blocking repeated medium disclosures.
+    - Label research/watch/rejected clearly; do not imply trade approval.
+  fund_registry:
+    script: tools/agents/fund_registry_agent.py
+    output: /tmp/fund_registry_latest.json
+    role: Register paper funds as the primary managed research units.
+  fund_performance_evaluator:
+    script: tools/agents/fund_performance_evaluator_agent.py
+    output: /tmp/fund_performance_evaluator_latest.json
+    role: Score and tier funds by paper/historical performance.
+  fund_risk_guardian:
+    script: tools/agents/fund_risk_guardian_agent.py
+    output: /tmp/fund_risk_guardian_latest.json
+    role: Fund-level risk guard for MDD/turnover/concentration.
+  fund_consensus:
+    script: tools/agents/fund_consensus_agent.py
+    output: /tmp/fund_consensus_latest.json
+    role: Convert top fund holdings/styles into recommendation overlay consensus.
+  fund_recommendation_consensus:
+    script: tools/agents/fund_recommendation_consensus_agent.py
+    output: /tmp/fund_recommendation_consensus_latest.json
+    role: Build yesterday/top-fund common-buy symbol consensus as the primary recommendation
+      view.
+  paper_fund_price_replay:
+    script: tools/agents/paper_fund_price_replay_agent.py
+    output: /tmp/paper_fund_price_replay_latest.json
+    role: Fast historical daily fund replay using price-derived signals only.
+  paper_fund_historical_replay:
+    script: tools/agents/paper_fund_historical_replay_agent.py
+    output: /tmp/paper_fund_historical_replay_latest.json
+    role: Historical daily replay of paper fund league with min-age retirement.
+  paper_fund_simulator:
+    script: tools/agents/paper_fund_simulator_agent.py
+    output: /tmp/paper_fund_simulator_latest.json
+    role: Run lightweight paper-only fund league with bounded evolution/retirement.
+  strategy_context_outcome_ledger:
+    script: tools/agents/strategy_context_outcome_ledger_agent.py
+    output: /tmp/strategy_context_outcome_ledger_latest.json
+    role: Record paper outcomes by market context x selected strategy/arm for router
+      feedback.
+  strategy_context_router:
+    script: tools/agents/strategy_context_router_agent.py
+    output: /tmp/strategy_context_router_latest.json
+    role: Select strategy family/logic/parameter arms for the current market context
+      before recommendation generation.
+  alpha_fast_lane:
+    script: tools/agents/alpha_fast_lane_agent.py
+    output: /tmp/alpha_fast_lane_latest.json
+    role: Select current recommendation/fund/mover symbol-logic pairs with early positive validation evidence for fast-lane historical validation.
+  recommendation_critic:
+    script: tools/agents/recommendation_critic_agent.py
+    output: /tmp/recommendations_latest.json
+    role: Separate blocking risks, under-validation, and quality cautions.
+  investment_committee:
+    script: tools/agents/investment_committee_agent.py
+    output: /tmp/investment_committee_latest.json
+    role: 'Two-layer committee: research support and risk gate.'
+  market_regime_gate:
+    script: tools/agents/market_regime_gate_agent.py
+    output: /tmp/market_regime_gate_latest.json
+    role: Market/issue/chase-risk context; should discriminate rather than mark every
+      candidate caution.
+  strategy_tail_risk_filter:
+    script: tools/agents/strategy_tail_risk_filter_agent.py
+    output: /tmp/strategy_tail_risk_filter_latest.json
+    role: Tier active strategies as quality_active, research_active, or tail_risk_limited.
+  exit_policy_optimizer:
+    script: tools/agents/exit_policy_optimizer_agent.py
+    output: /tmp/exit_policy_optimizer_latest.json
+    role: Propose exit-policy retests for weak EV and left-tail risk.
+  org_evaluator:
+    script: tools/agents/org_evaluator_agent.py
+    output: /tmp/research_org_evaluation_latest.json
+    role: Meta-evaluate throughput, gates, disclosure quality, committee behavior,
+      and structural audit issues.
+  suborg_summary:
+    script: tools/agents/suborg_summary_agent.py
+    output: /tmp/research_org_suborg_summary_latest.json
+    role: Produce compact department-level contracts and research_queue_latest so
+      agents do not need large full artifacts for ordinary review.
+  experiment_spec_compiler:
+    script: tools/agents/experiment_spec_compiler_agent.py
+    output: /tmp/research_experiment_specs_latest.json
+    role: Compile research queue, audit, scout, and escalation outputs into normalized
+      paper-only experiment specs for the generic planner/runner workflow.
+authority_contracts:
+  market_mover_seed: data_seed_only
+  investor_flow_seed: data_seed_only
+  market_shock_mover_scout: hypothesis_source_only
+  theme_spillover_backtest: diagnostic_only
+  strategy_registry_status:
+    canonical_writer: strategy_lifecycle
+    proposal_or_overlay_agents:
+    - active_strategy_balancer
+    - strategy_tail_risk_filter
+    - strategy_success_optimizer
+    rule: Non-canonical agents must emit proposals, tiers, or flags by default; direct
+      status changes require explicit legacy/apply flags and should be treated as
+      exceptions.
+  recommendations_latest:
+    base_writer: recommendation_agent
+    overlay_agents:
+    - recommendation_critic
+    - portfolio_risk_manager
+    - market_regime_gate
+    final_writer: investment_committee
+    final_fields:
+    - recommendation_bucket
+    - recommendation_bucket_label
+    - trade_eligible
+    - trade_gate
+    rule: Overlay agents attach named subdocuments/opinions and notes. Only the final
+      writer changes final bucket or trade eligibility.
+  meta_governance:
+    orchestrator: research_org_orchestrator
+    evaluator: org_evaluator
+    guardian: org_improvement_guardian
+    integrity: paper_trader_integrity
+    rule: Orchestrator chooses bounded research actions; evaluator audits structure
+      and outcomes; guardian classifies fixes; integrity checks runtime/config health.
+  token_optimized_read_order:
+    primary:
+    - /tmp/research_pipeline_status.json
+    - /tmp/research_org_suborg_summary_latest.json
+    - /tmp/research_queue_latest.json
+    - /tmp/recommendations_status_latest.json
+    - /tmp/audit_status_latest.json
+    rule: Open full artifacts such as recommendation_audit_full_latest.json only
+      for targeted debugging, never as default context.
+toolbox_agents:
+  manual_research:
+  - stock_research_run.py
+  - symbol_review_agent.py
+  - walk_forward_agent.py
+  - forward_test_agent.py
+  - backtest_runner.py
+  - regime_segmentation_agent.py
+  - universe_scout.py
+  import_utilities:
+  - import_krx_corp_list.py
+  - import_stooq_daily.py
+  experimental_labs:
+  - crypto_lab_run.py
+  - external_context_agent.py
+  - candidate_funnel_agent.py
+  - strategy_family_manager_agent.py
+  legacy_wrappers:
+  - research_org_run.py
+  - agent_evaluator.py
+  market_shock_mover_scout:
+    script: tools/agents/market_shock_mover_scout_agent.py
+    output: /tmp/market_shock_mover_scout_latest.json
+    role: Detect after-close surges/crashes and second-order theme spillovers as paper-only
+      hypothesis inputs.
+  supply_close_strength_scout:
+    script: tools/agents/supply_close_strength_scout_agent.py
+    output: /tmp/supply_close_strength_scout_latest.json
+    role: Detect volume expansion plus upper-range close strength as paper-only supply/demand
+      research candidates; investor-flow proxy only until external flow data is ingested.
+  theme_spillover_backtest:
+    script: tools/agents/theme_spillover_backtest_agent.py
+    output: /tmp/theme_spillover_backtest_latest.json
+    role: Historically validate theme-spillover follow-through versus benchmarks before
+      research promotion.
+  research_hypothesis:
+    script: tools/agents/research_hypothesis_agent.py
+    output: /tmp/research_hypotheses_latest.json
+    role: Generate bounded research hypotheses from org bottlenecks, audit warnings,
+      shock/spillover scouts, and recommendation blockers.
+  experiment_planner:
+    script: tools/agents/experiment_planner_agent.py
+    output: /tmp/research_experiment_plan_latest.json
+    role: Convert hypotheses into bounded diagnostic plans without applying state
+      changes.
+  evidence_judge:
+    script: tools/agents/evidence_judge_agent.py
+    output: /tmp/research_evidence_judge_latest.json
+    role: Judge experiment outputs and propose next steps; no direct promotion/recommendation
+      authority.
+  experiment_runner:
+    script: tools/agents/experiment_runner_agent.py
+    output: /tmp/research_experiment_results_latest.json
+    role: Execute bounded target-aware diagnostic experiments only; no direct policy/status/recommendation
+      authority.
+  research_experiment_ledger:
+    script: tools/agents/research_experiment_ledger_agent.py
+    output: /tmp/research_experiment_ledger_latest.json
+    role: Track autonomous experiment history, repeat rate, and before/after deltas
+      without mutating policy.
+  market_mover_seed:
+    script: tools/agents/market_mover_seed_agent.py
+    output: /tmp/market_mover_seed_latest.json
+  investor_flow_seed:
+    script: tools/agents/investor_flow_seed_agent.py
+    output: /tmp/investor_flow_seed_latest.json
+    role: Collect Naver foreign/institution net-buy seed symbols for paper-only monitoring
+      and validation priority.
+  supply_weight_evaluator:
+    script: tools/agents/supply_weight_evaluator_agent.py
+    output: /tmp/supply_weight_evaluator_latest.json
+    authority: proposal_only_weight_tuning_gate
+    mission: Evaluate supply/investor-flow score overlays against completed paper
+      outcomes and propose bounded weight changes.
+  target_return_adjustment_evaluator:
+    script: tools/agents/target_return_adjustment_evaluator_agent.py
+    output: /tmp/target_return_adjustment_evaluator_latest.json
+    authority: proposal_only_target_return_tuning_gate
+    mission: Compare adjusted vs original target-return outcomes and propose bounded
+      keep/up/down changes for the default target haircut.
+  recommendation_market_context:
+    script: tools/agents/recommendation_market_context_agent.py
+    output: /tmp/recommendation_market_context_latest.json
+  common_universe:
+    script: tools/agents/common_universe_agent.py
+    output: /tmp/common_universe_latest.json

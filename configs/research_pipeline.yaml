@@ -1,0 +1,363 @@
+{
+  "schema": "paper_trader.research_pipeline.v1",
+  "defaults": {
+    "timeout_seconds": 180,
+    "failure_mode": "degrade"
+  },
+  "agents": {
+    "pipeline_smoke_check": {
+      "timeout_seconds": 60,
+      "failure_mode": "block"
+    },
+    "universe_discovery": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "market_mover_seed": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "daily_price_refresh": {
+      "timeout_seconds": 240,
+      "failure_mode": "degrade"
+    },
+    "opendart_disclosures": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "sec_edgar_disclosures": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "universe_curator": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "opendart_financials": {
+      "timeout_seconds": 240,
+      "failure_mode": "degrade"
+    },
+    "data_quality": {
+      "timeout_seconds": 120,
+      "failure_mode": "block"
+    },
+    "strategy_generator": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "capacity_planner": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "simulation_validation_worker": {
+      "timeout_seconds": 240,
+      "failure_mode": "degrade"
+    },
+    "strategy_novelty_pruner": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "strategy_lifecycle": {
+      "timeout_seconds": 120,
+      "failure_mode": "block"
+    },
+    "active_strategy_balancer": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "strategy_success_optimizer": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "recommendation_agent": {
+      "timeout_seconds": 120,
+      "failure_mode": "block"
+    },
+    "recommendation_critic": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "portfolio_risk_manager": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "market_regime_gate": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "investment_committee": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "current_recommendation_validation": {
+      "timeout_seconds": 300,
+      "failure_mode": "degrade"
+    },
+    "committee_performance_ledger": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "recommendation_outcome_tracker": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "recommendation_funnel": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "recommendation_calibration": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "recommendation_audit": {
+      "timeout_seconds": 600,
+      "failure_mode": "block"
+    },
+    "outcome_attribution": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "org_evaluator": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "org_improvement_guardian": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "discovery_validation": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "strategy_tail_risk_filter": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "market_context": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "market_shock_mover_scout": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "supply_close_strength_scout": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "theme_spillover_backtest": {
+      "timeout_seconds": 240,
+      "failure_mode": "degrade"
+    },
+    "market_issue_scout": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "market_news_issue_scout": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "market_issue_narrative": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "disclosure_impact_recommendations": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "recommendation_agent_after_disclosure": {
+      "timeout_seconds": 120,
+      "failure_mode": "block"
+    },
+    "oversold_recovery": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "shadow_recommendations": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "internal_signal_board": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "paper_trader_integrity": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "exit_policy_optimizer": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "research_org_orchestrator": {
+      "timeout_seconds": 300,
+      "failure_mode": "degrade"
+    },
+    "org_architecture_review": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "disclosure_impact": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "research_hypothesis": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "experiment_planner": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "experiment_spec_compiler": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "evidence_judge": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "experiment_runner": {
+      "timeout_seconds": 360,
+      "failure_mode": "degrade"
+    },
+    "research_experiment_ledger": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "short_horizon_profit_profile": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "investor_flow_seed": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "supply_weight_evaluator": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "target_return_adjustment_evaluator": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "strategy_context_router": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "strategy_context_outcome_ledger": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "paper_fund_simulator": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "paper_fund_historical_replay": {
+      "timeout_seconds": 180,
+      "failure_mode": "degrade"
+    },
+    "paper_fund_price_replay": {
+      "timeout_seconds": 900,
+      "failure_mode": "degrade"
+    },
+    "fund_registry": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "fund_performance_evaluator": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "fund_risk_guardian": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "fund_consensus": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "fund_recommendation_consensus": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "common_universe": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "recommendation_market_context": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "audit_tail_quarantine_scout": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "experiment_escalation": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "kr_entry_signal_scout": {
+      "timeout_seconds": 240,
+      "failure_mode": "degrade"
+    },
+    "kr_multi_evidence_signal_scout": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "market_route_audit": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "positive_cohort_scout": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "smbs_fx_import": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "us_route_eligibility": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "suborg_summary": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    }
+  },
+  "cadence_policy": {
+    "light_15m": [
+      "pipeline_smoke_check",
+      "data_quality",
+      "validation_capacity_planner",
+      "recommendation_funnel",
+      "experiment_spec_compiler",
+      "suborg_summary"
+    ],
+    "medium_hourly": [
+      "recommendation_agent",
+      "recommendation_critic",
+      "portfolio_risk_manager",
+      "market_regime_gate",
+      "investment_committee",
+      "fund_consensus",
+      "suborg_summary"
+    ],
+    "heavy_daily_or_manual": [
+      "recommendation_audit",
+      "experiment_planner",
+      "experiment_runner",
+      "evidence_judge",
+      "paper_fund_price_replay"
+    ],
+    "read_order": [
+      "/tmp/research_pipeline_status.json",
+      "/tmp/research_org_suborg_summary_latest.json",
+      "/tmp/research_queue_latest.json",
+      "/tmp/recommendations_status_latest.json",
+      "/tmp/audit_status_latest.json"
+    ],
+    "rule": "Use compact department summaries as default context; open full artifacts only for targeted debugging."
+  }
+}

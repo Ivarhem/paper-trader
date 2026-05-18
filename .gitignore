@@ -1,0 +1,22 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+.DS_Store
+auth_users.json
+logs/
+static/recommendation_history.json
+auth_users.json.bak*
+
+# Generated research/runtime artifacts
+state/latest/
+static/*_latest.json
+static/recommendation_daily_outcomes.json
+static/validation_worker_status_latest.json

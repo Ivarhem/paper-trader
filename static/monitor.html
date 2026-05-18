@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper Trader Recommendation Console</title>
+  <meta name="root-path" content="/paper-trader">
+  <link rel="stylesheet" href="./static/style.css?v=20260515fundStatus1">
+</head>
+<body>
+<div class="app-shell monitor-compact ux-redesign ui-cleanup ui-system">
+  <header class="topbar app-header">
+    <div>
+      <p class="eyebrow">Paper Research Console</p>
+      <h1>리서치 대시보드</h1>
+      <p class="header-subtitle">종목추천을 먼저 보고, Fund·위원회·Risk Gate·전략 신뢰 라벨은 판단 근거로 분리해 확인합니다.</p>
+    </div>
+    <div class="topbar-actions title-actions">
+      <button id="logout-btn" class="secondary logout-compact">Logout</button>
+    </div>
+  </header>
+
+  <nav class="monitor-tabs" aria-label="monitor sections">
+    <button class="monitor-tab active primary-tab" data-tab="overview">추천</button>
+    <button class="monitor-tab" data-tab="funds">엔진</button>
+    <button class="monitor-tab" data-tab="validation">검증</button>
+    <button class="monitor-tab" data-tab="org">조직</button>
+    <button class="monitor-tab" data-tab="symbols">검토</button>
+    <button class="monitor-tab" data-tab="details">상세</button>
+  </nav>
+
+  <main class="layout ux-layout">
+    <section class="panel metrics recommendation-hero tab-panel active ux-primary-panel" data-tab-panel="overview">
+      <div class="section-header">
+        <div><p class="eyebrow">Primary View</p><h2>종목추천</h2></div>
+        <div class="market-switcher"><label for="market-filter">시장</label><select id="market-filter"><option value="KR" selected>한국</option><option value="US">미국</option></select><span class="tag">검증용</span></div>
+      </div>
+      <p id="recommendations-summary" class="summary-sentence">현재 후보를 불러오는 중입니다.</p>
+      <div id="recommendations-cards" class="recommendation-card-list"></div>
+    </section>
+
+    <section class="panel metrics tab-panel ux-primary-panel" data-tab-panel="funds">
+      <div class="section-header"><div><p class="eyebrow">Recommendation Engine</p><h2>추천 품질 엔진: Fund 성과</h2></div><span class="tag">paper only</span></div>
+      <p id="fund-performance-summary" class="summary-sentence">추천 품질을 높이는 fund 근거와 추천 종목 연결을 불러오는 중입니다.</p>
+      <div id="fund-performance-metrics" class="metric-grid"></div>
+      <div id="fund-performance-extra" class="fund-extra-grid"></div>
+      <div id="fund-performance-cards" class="audit-card-list"></div>
+    </section>
+
+    <section class="panel metrics tab-panel ux-primary-panel validation-main-panel" data-tab-panel="validation">
+      <div class="section-header"><div><p class="eyebrow">Recommendation Validation</p><h2>추천검증</h2></div><span class="tag">paper / historical</span></div>
+      <p id="validation-daily-summary" class="summary-sentence">일일 추천 성과를 불러오는 중입니다.</p>
+      <div id="validation-daily-metrics" class="metric-grid"></div>
+      <section class="nested-panel validation-worker-panel"><div class="section-header"><div><p class="eyebrow">Validation Worker</p><h2>검증 워커 진행 상태</h2></div><span class="tag">3m batch</span></div><p id="validation-worker-summary" class="summary-sentence">검증 워커 상태를 불러오는 중입니다.</p><div id="validation-worker-metrics" class="metric-grid"></div></section>
+      <div id="validation-main-cards" class="audit-card-list"></div>
+    </section>
+
+    <section class="panel tab-panel ux-primary-panel" data-tab-panel="org">
+      <div class="section-header"><div><p class="eyebrow">Recommendation Organization</p><h2>추천 품질 조직</h2></div><span class="tag">fund-first</span></div>
+      <p id="fund-org-summary" class="summary-sentence">종목추천을 개선하는 fund 조직 상태를 불러오는 중입니다.</p>
+      <div id="fund-org-metrics" class="metric-grid"></div>
+      <div id="fund-org-cards" class="audit-card-list"></div>
+    </section>
+
+    <section class="panel tab-panel ux-secondary-panel" data-tab-panel="org">
+      <div class="section-header"><div><p class="eyebrow">Org Loop</p><h2>개선루프 / 조직 구성도</h2></div></div>
+      <div id="org-evaluation-metrics" class="metric-grid"></div>
+      <p id="org-status-note" class="summary-sentence">에이전트 상태를 불러오는 중입니다.</p>
+      <div id="org-topology" class="org-topology"></div>
+      <div id="org-evaluation-cards" class="audit-card-list"></div>
+      <details class="compact-raw-details"><summary>신규 에이전트 제안</summary><div id="agent-proposal-cards" class="audit-card-list"></div></details>
+    </section>
+
+    <section class="panel metrics tab-panel ux-primary-panel" data-tab-panel="symbols">
+      <div class="section-header"><div><p class="eyebrow">Symbol Workspace</p><h2>종목검토</h2></div><div class="strategy-controls symbol-actionbar"><input id="symbol-review-input" placeholder="티커 또는 종목명"><button id="symbol-review-btn" class="button secondary">상세검토</button></div></div>
+      <p id="symbol-review-summary" class="summary-sentence">종목추천 화면의 후보를 먼저 보여줍니다. 종목을 선택하면 가격, 재무, 공시, 검토이력을 한 번에 확인합니다.</p>
+      <div class="split-workarea symbol-workarea" id="symbol-workarea">
+        <aside class="side-panel symbol-history-panel">
+          <div class="side-panel-head"><div><h3>모니터링 종목</h3><span class="hint">추천 후보 종목 우선</span></div></div>
+          <div class="symbol-filter-panel"><input id="universe-search" placeholder="종목명 또는 티커 검색"><div class="symbol-filter-grid"><label><span>시장</span><select id="universe-market-filter"><option value="all">전체</option><option value="KR" selected>한국</option><option value="US">미국</option></select></label><label><span>상태</span><select id="universe-status-filter"><option value="all">전체</option><option value="active">활성</option><option value="watch">관찰</option><option value="rejected">제외</option><option value="quarantine">격리</option><option value="retired">퇴역</option><option value="benchmark">벤치마크</option></select></label><label><span>정렬</span><select id="universe-sort"><option value="score">점수</option><option value="name">이름</option><option value="bars">데이터</option><option value="updated">최근갱신</option></select></label></div></div>
+          <p id="universe-summary" class="summary-sentence compact-summary">모니터링 종목을 불러오는 중입니다.</p>
+          <div id="symbol-universe-list" class="audit-card-list compact-list symbol-list"></div>
+        </aside>
+        <div class="split-resizer" id="symbol-split-resizer" title="드래그해서 폭 조절"></div>
+        <section class="detail-panel"><div id="symbol-review-drawer" class="symbol-review-drawer" aria-live="polite"></div><div id="symbol-review-result" class="audit-card-list"><div class="empty-state"><b>종목을 선택하세요.</b><br>왼쪽 목록에서 종목을 선택하면 요약 정보가 표시됩니다.</div></div></section>
+      </div>
+      <details class="compact-raw-details symbol-history-section"><summary>최근 상세검토 이력</summary><div id="symbol-review-history" class="audit-card-list compact-list"></div></details>
+    </section>
+
+    <section class="panel secondary-details tab-panel ux-primary-panel" data-tab-panel="details">
+      <div class="section-header"><div><p class="eyebrow">Evidence Detail</p><h2>상세 근거</h2></div><span class="tag">운영자용</span></div>
+      <div class="inner-tabs" id="detail-tabs"><button class="inner-tab active" data-detail-tab="fund-trades">Fund 거래이력</button><button class="inner-tab" data-detail-tab="validation-raw">추천 검증 근거</button><button class="inner-tab" data-detail-tab="strategy-raw">전략 신뢰도</button><button class="inner-tab" data-detail-tab="research-raw">리서치 실행</button><button class="inner-tab" data-detail-tab="org-raw">조직 실행</button><button class="inner-tab" data-detail-tab="universe">Universe</button><button class="inner-tab" data-detail-tab="disclosures">공시</button><button class="inner-tab" data-detail-tab="walkforward">Walk-forward</button><button class="inner-tab" data-detail-tab="backtests">Backtests</button></div>
+      <div class="detail-tab-panel active" data-detail-tab-panel="fund-trades"><section class="nested-panel"><div class="section-header"><div><p class="eyebrow">Fund Trades</p><h2>Fund 거래이력</h2></div><input id="fund-trade-filter" placeholder="fund id"></div><p id="fund-trade-summary" class="summary-sentence">거래이력을 불러오는 중입니다.</p><div id="fund-trade-table"></div></section></div><div class="detail-tab-panel" data-detail-tab-panel="validation-raw"><section class="nested-panel"><h2>검증 요약</h2><p id="audit-summary-text" class="summary-sentence"></p><div id="recommendation-audit-metrics" class="metric-grid"></div></section><section class="nested-panel"><div class="section-header"><div><p class="eyebrow">Outcome</p><h2>추천 사후성과</h2></div><span class="tag">1D / 5D / 20D</span></div><p id="recommendation-outcome-summary" class="summary-sentence">추천 이력의 forward return을 불러오는 중입니다.</p><div id="recommendation-outcome-metrics" class="metric-grid"></div><div id="recommendation-outcome-table"></div></section><section class="nested-panel"><div class="section-header"><div><p class="eyebrow">Decision Funnel</p><h2>후보 선별 / 판단 보정</h2></div></div><p id="candidate-funnel-summary" class="summary-sentence">후보 선별 흐름을 불러오는 중입니다.</p><div id="candidate-funnel-metrics" class="metric-grid"></div><div id="calibration-findings" class="audit-card-list compact-list"></div></section><section class="nested-panel"><div class="section-header"><h2>성공 / 실패 사례</h2></div><div class="filter-bar"><label>결과<select id="audit-result-filter"><option value="all">전체</option><option value="success">성공</option><option value="fail">실패</option><option value="timeout">Timeout</option></select></label><label>종목<input id="audit-symbol-filter" placeholder="예: 005930.KS"></label></div><div id="recommendation-audit-table"></div><details class="inline-details"><summary>카드 보기</summary><div id="recommendation-audit-cards" class="audit-card-list"></div></details></section><section class="nested-panel"><div class="section-header"><h2>검증 진행률</h2></div><div id="coverage-metrics" class="metrics-grid"></div></section></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="strategy-raw"><section class="nested-panel"><div class="section-header"><h2>전략 DNA 상태</h2><div class="strategy-controls"><input id="strategy-search" placeholder="전략명 검색"><select id="strategy-status-filter"><option value="all">전체 상태</option><option value="active">활성</option><option value="watch">관찰</option><option value="probation">검증유예</option><option value="retired">퇴역</option></select><select id="strategy-sort"><option value="status">상태 우선</option><option value="excess">초과수익순</option><option value="success">성공률순</option><option value="samples">샘플순</option><option value="recent">최근성과순</option></select></div></div><p id="strategy-summary" class="summary-sentence">전략 DNA 상태를 불러오는 중입니다.</p><div id="strategy-cards" class="audit-card-list"></div></section></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="research-raw"><section class="nested-panel"><div class="section-header"><div><p class="eyebrow">Historical Research</p><h2>최근 리서치 실행</h2></div><span class="tag">historical only</span></div><div id="research-metrics" class="metric-grid"></div><div id="promoted-table"></div></section></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="org-raw"><section class="nested-panel"><div class="section-header"><div><p class="eyebrow">Pipeline Snapshot</p><h2>조직 실행 원본 요약</h2></div></div><div id="org-metrics" class="metric-grid"></div><div id="org-roles-table"></div></section><section class="nested-panel"><div class="section-header"><h2>Agent strategy cards</h2></div><div id="agent-strategy-cards" class="audit-card-list compact-list"></div></section></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="universe"><h2>Universe 전체 카드</h2><div id="universe-cards" class="audit-card-list compact-list"></div><h2>Universe Curator</h2><div id="universe-curator-table"></div><h2>Universe Scout</h2><div id="universe-scout-table"></div></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="disclosures"><h2>Disclosure Features</h2><div id="disclosure-feature-table"></div><h2>Recent Disclosures</h2><div id="disclosure-table"></div></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="walkforward"><h2>Walk-Forward Results</h2><div id="walk-forward-table"></div></div>
+      <div class="detail-tab-panel" data-detail-tab-panel="backtests"><h2>Recent Backtest Runs</h2><div id="backtest-runs-table"></div></div>
+    </section>
+  </main>
+</div>
+<script src="./static/monitor.js?v=20260515fundStatus1"></script>
+<script>(function(){const ROOT=document.querySelector('meta[name="root-path"]')?.content||'';const b=document.getElementById('logout-btn');if(b)b.addEventListener('click',async()=>{await fetch(`${ROOT}/api/auth/logout`,{method:'POST'}).catch(()=>{});location.href=`${ROOT}/login`;});})();</script>
+</body>
+</html>
