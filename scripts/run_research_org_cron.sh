@@ -22,26 +22,30 @@ mkdir -p "$STATE_LATEST"
 
 persist_latest_outputs() {
   mkdir -p "$STATE_LATEST"
+  latest_files=(
+    /tmp/research_pipeline_status.json
+    /tmp/research_pipeline_latest.json
+    /tmp/strategy_novelty_pruner_latest.json
+    /tmp/recommendation_audit_latest.json
+    /tmp/recommendations_latest.json
+    /tmp/active_strategy_balancer_latest.json
+    /tmp/strategy_candidates_latest.json
+    /tmp/paper_fund_price_replay_latest.json
+    /tmp/investment_committee_latest.json
+    /tmp/stock_research_latest.json
+    /tmp/org_improvement_guardian_latest.json
+    /tmp/research_experiment_ledger_latest.json
+    /tmp/stock_research_near_miss_quarantine_latest.json
+    /tmp/stock_research_peer_basket_latest.json
+    /tmp/next_trade_issue_context_status.json
+    /tmp/next_trade_issue_context_latest.json
+    /tmp/agent_task_state_latest.json
+  )
   for f in \
-    /tmp/research_pipeline_status.json \
-    /tmp/research_pipeline_latest.json \
-    /tmp/strategy_novelty_pruner_latest.json \
-    /tmp/recommendation_audit_latest.json \
-    /tmp/recommendations_latest.json \
-    /tmp/active_strategy_balancer_latest.json \
-    /tmp/strategy_candidates_latest.json \
-    /tmp/paper_fund_price_replay_latest.json \
-    /tmp/investment_committee_latest.json \
-    /tmp/stock_research_latest.json \
-    /tmp/org_improvement_guardian_latest.json \
-    /tmp/research_experiment_ledger_latest.json \
-    /tmp/stock_research_near_miss_quarantine_latest.json \
-    /tmp/stock_research_peer_basket_latest.json \
-    /tmp/next_trade_issue_context_status.json \
-    /tmp/next_trade_issue_context_latest.json \
-    /tmp/agent_task_state_latest.json; do
+    "${latest_files[@]}"; do
     [ -f "$f" ] && cp -f "$f" "$STATE_LATEST/$(basename "$f")" || true
   done
+  python3 scripts/sync_latest_artifacts.py "${latest_files[@]}" >/dev/null || true
   return 0
 }
 
