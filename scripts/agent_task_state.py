@@ -7,12 +7,16 @@ import contextlib
 import fcntl
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 DEFAULT_STATE = Path("state/agent_tasks.json")
 DEFAULT_LATEST = Path("/tmp/agent_task_state_latest.json")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def now_iso() -> str:
@@ -49,6 +53,18 @@ def locked_state(path: Path):
 
 
 def write_latest(data: dict[str, Any], latest_path: Path) -> None:
+    try:
+        from app.database import save_latest_artifact
+
+        save_latest_artifact(
+            latest_path.name.removesuffix(".json"),
+            data,
+            artifact_path=str(latest_path),
+            status=((data.get("contract") or {}).get("status") if isinstance(data.get("contract"), dict) else data.get("status")),
+            summary=str((data.get("contract") or {}).get("summary") or data.get("summary") or "")[:1000],
+        )
+    except Exception as exc:
+        data.setdefault("contract", {}).setdefault("warnings", []).append(f"latest_artifact_db_write_failed: {str(exc)[:180]}")
     latest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = latest_path.with_suffix(latest_path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
