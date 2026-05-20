@@ -14,6 +14,16 @@ reproducible Python micro-agent with:
 The orchestrator is `research_pipeline_agent.py`, normally run by server cron.
 See `configs/research_agents.yaml` for the organization manifest and role map.
 
+## Orchestration state
+
+Long-running worker, cron, and isolated-agent work should update the shared task
+ledger with `scripts/agent_task_state.py`. This keeps the main Ray session free
+for user conversation, decisions, and review while preserving a compact handoff
+in `state/agent_tasks.json` and `/tmp/agent_task_state_latest.json`. Code/script
+fixes that require more than two minutes of checks, and heavy historical/paper
+validation, should run as worker-owned subtasks instead of blocking the main
+Telegram session. See `docs/agents/multi_agent_orchestration.md`.
+
 ## Context-efficient delegation
 
 The pipeline writes compact CODEX-goal-style context artifacts before any large

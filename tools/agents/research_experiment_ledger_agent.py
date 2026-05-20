@@ -48,6 +48,24 @@ def delta(before, after):
             if diff: changes[section][k]=diff
     return changes
 
+def meaningful_result_delta(result):
+    metrics=(result or {}).get('output_metrics') or (result or {}).get('metrics') or {}
+    saved=metrics.get('saved') if isinstance(metrics.get('saved'),dict) else {}
+    numeric_keys=('inserted','updated','audited_items','sample_count')
+    for key in numeric_keys:
+        try:
+            if float(metrics.get(key) or 0) > 0:
+                return True
+        except Exception:
+            pass
+    for key in ('inserted','updated'):
+        try:
+            if float(saved.get(key) or 0) > 0:
+                return True
+        except Exception:
+            pass
+    return False
+
 def load_ledger():
     if not LEDGER.exists(): return {'schema':'research_experiment_ledger.v1','entries':[]}
     try: return json.loads(LEDGER.read_text(encoding='utf-8'))
@@ -79,8 +97,9 @@ def main():
             # We only have after snapshot for first ledger integration; future runs will compare to prior after_snapshot.
             before=(prior_keys.get(k) or {}).get('after_snapshot') or {}
             after=snapshot_for([t])
-            ent={'run_at':now(),'experiment_key':k,'repeated':repeated,'target':t,'experiment_type':exp,'hypothesis_ids':p.get('hypothesis_ids'),'task':p.get('task'),'decision':(j or {}).get('decision'),'reason':(j or {}).get('reason'),'result_outputs':[r.get('output') for r in related],'before_snapshot':before,'after_snapshot':after,'delta':delta(before,after),'real_trading':False,'authority':'ledger_only'}
-            has_delta=bool(ent['delta'].get('strategies') or ent['delta'].get('recommendations'))
+            result_metric_delta=any(meaningful_result_delta(r) for r in related)
+            ent={'run_at':now(),'experiment_key':k,'repeated':repeated,'target':t,'experiment_type':exp,'hypothesis_ids':p.get('hypothesis_ids'),'task':p.get('task'),'decision':(j or {}).get('decision'),'reason':(j or {}).get('reason'),'result_outputs':[r.get('output') for r in related],'result_metrics':[r.get('output_metrics') or r.get('metrics') for r in related],'result_metric_delta':result_metric_delta,'before_snapshot':before,'after_snapshot':after,'delta':delta(before,after),'real_trading':False,'authority':'ledger_only'}
+            has_delta=bool(ent['delta'].get('strategies') or ent['delta'].get('recommendations') or result_metric_delta)
             if repeated and not has_delta:
                 prev=prior_keys.get(k) or {}
                 prev['last_seen_at']=now()

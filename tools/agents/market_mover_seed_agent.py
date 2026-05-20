@@ -10,6 +10,7 @@ from tools.agents.lib.agent_contract import attach_contract
 NAVER_URLS={
     'gainer':'https://finance.naver.com/sise/sise_rise.naver?sosok={sosok}',
     'loser':'https://finance.naver.com/sise/sise_fall.naver?sosok={sosok}',
+    'active':'https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}',
 }
 YAHOO_SCREENER_URL='https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?scrIds={scr_id}&count={count}'
 YAHOO_SCREENS={'gainer':'day_gainers','loser':'day_losers','active':'most_actives'}
@@ -55,7 +56,7 @@ def parse_market(sosok, limit, direction='gainer'):
         price=clean_num(m.group(4)); change_pct=clean_num(m.group(5)); volume=clean_num(m.group(6))
         if rank>limit: continue
         upper_limit_candidate = is_kr_upper_limit_candidate(change_pct, direction)
-        rows.append({'rank':rank,'code':code,'symbol':code+suffix,'name':name,'market':'KR','exchange':market,'source':'naver_sise_rise' if direction=='gainer' else 'naver_sise_fall','direction':direction,'price':price,'change_pct':change_pct,'volume':volume,'probable_stock':is_probable_stock(name),'upper_limit_candidate':upper_limit_candidate,'seed_priority':'upper_limit' if upper_limit_candidate else direction,'captured_at':now(),'data_timing':'intraday_or_delayed_provisional'})
+        rows.append({'rank':rank,'code':code,'symbol':code+suffix,'name':name,'market':'KR','exchange':market,'source':'naver_sise_rise' if direction=='gainer' else ('naver_sise_fall' if direction=='loser' else 'naver_sise_quant'),'direction':direction,'price':price,'change_pct':change_pct,'volume':volume,'probable_stock':is_probable_stock(name),'upper_limit_candidate':upper_limit_candidate,'seed_priority':'upper_limit' if upper_limit_candidate else direction,'captured_at':now(),'data_timing':'intraday_or_delayed_provisional'})
     return rows
 
 
@@ -89,7 +90,7 @@ def main():
     markets={x.strip().upper() for x in args.markets.split(',') if x.strip()}
     if 'KR' in markets:
         for sosok in MARKETS:
-            for direction in ('gainer','loser'):
+            for direction in ('gainer','loser','active'):
                 try: items.extend(parse_market(sosok,args.limit_per_market,direction))
                 except Exception as exc: errors.append(f'{MARKETS[sosok][0]} {direction} fetch failed: {exc}')
     if 'US' in markets:
@@ -105,7 +106,7 @@ def main():
     top_stock=[x for x in items if x.get('probable_stock')]
     upper_limit=[x for x in top_stock if x.get('upper_limit_candidate')]
     prioritized_stock=upper_limit + [x for x in top_stock if not x.get('upper_limit_candidate')]
-    packet={'run_at':now(),'mode':'market_mover_seed','provider':'naver_finance_sise_rise_fall+yahoo_finance_screener','real_trading':False,'authority':'data_seed_only','summary':{'seed_count':len(items),'probable_stock_count':sum(1 for x in items if x.get('probable_stock')),'kr_seed_count':sum(1 for x in items if x.get('market')=='KR'),'us_seed_count':sum(1 for x in items if x.get('market')=='US'),'gainer_count':sum(1 for x in items if x.get('direction')=='gainer'),'loser_count':sum(1 for x in items if x.get('direction')=='loser'),'active_count':sum(1 for x in items if x.get('direction')=='active'),'upper_limit_candidate_count':len(upper_limit),'top_stock_count':len(top_stock),'error_count':len(errors)},'items':items,'top_stock_items':prioritized_stock,'top_upper_limit_items':upper_limit,'errors':errors,'next_actions':['Use upper-limit candidates as provisional price-refresh and shock-scout inputs only; no recommendation or active strategy authority.']}
+    packet={'run_at':now(),'mode':'market_mover_seed','provider':'naver_finance_sise_rise_fall_quant+yahoo_finance_screener','real_trading':False,'authority':'data_seed_only','summary':{'seed_count':len(items),'probable_stock_count':sum(1 for x in items if x.get('probable_stock')),'kr_seed_count':sum(1 for x in items if x.get('market')=='KR'),'us_seed_count':sum(1 for x in items if x.get('market')=='US'),'gainer_count':sum(1 for x in items if x.get('direction')=='gainer'),'loser_count':sum(1 for x in items if x.get('direction')=='loser'),'active_count':sum(1 for x in items if x.get('direction')=='active'),'upper_limit_candidate_count':len(upper_limit),'top_stock_count':len(top_stock),'error_count':len(errors)},'items':items,'top_stock_items':prioritized_stock,'top_upper_limit_items':upper_limit,'errors':errors,'next_actions':['Use upper-limit and volume-rank candidates as provisional price-refresh and validation inputs only; no recommendation or active strategy authority.']}
     attach_contract(packet,'market_mover_seed',status='degraded' if errors else 'ok',outputs={'seed_count':len(items),'probable_stock_count':packet['summary']['probable_stock_count'],'upper_limit_candidate_count':len(upper_limit)},metrics=packet['summary'],warnings=errors,next_actions=packet['next_actions'])
     Path(args.output).write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')
     Path('/tmp/market_mover_upper_limit_symbols.txt').write_text(','.join(x.get('symbol','') for x in upper_limit if x.get('symbol')), encoding='utf-8')

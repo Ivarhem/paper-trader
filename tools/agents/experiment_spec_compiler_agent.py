@@ -19,6 +19,8 @@ OUT = Path("/tmp/research_experiment_specs_latest.json")
 
 def add_spec(specs: list[dict[str, Any]], *, source: str, title: str, runner_task: str, targets: list[str] | None = None, priority: str = "medium", success_criteria: dict[str, Any] | None = None, evidence: dict[str, Any] | None = None) -> None:
     clean_targets = [str(x) for x in (targets or []) if x not in (None, "")]
+    if runner_task in {"validation_probe", "theme_spillover_backtest"} and not clean_targets:
+        return
     key = (runner_task, tuple(clean_targets), title)
     for existing in specs:
         if existing.get("_dedupe_key") == key:
@@ -48,6 +50,7 @@ def main() -> None:
     positive = read_json("/tmp/positive_cohort_scout_latest.json")
     tail = read_json("/tmp/audit_tail_quarantine_scout_latest.json")
     route = read_json("/tmp/market_route_audit_latest.json")
+    strategy_director = read_json("/tmp/strategy_director_latest.json")
     specs: list[dict[str, Any]] = []
 
     queue_summary = queue.get("summary") or {}
@@ -78,6 +81,33 @@ def main() -> None:
             success_criteria={"expected_excess_value_pct": ">= 0", "p10_excess_return_pct": "> -8"},
             evidence={"quality_flags": sorted(flags), "avg_excess_return_pct": best.get("avg_excess_return_pct"), "expected_excess_value_pct": best.get("expected_excess_value_pct")},
         )
+
+    promotion_items = strategy_director.get("promotion_queue") or []
+    if promotion_items:
+        validation_targets = [item.get("logic") for item in promotion_items if item.get("logic") and item.get("owner_agent") == "discovery_validation"]
+        exit_targets = [item.get("logic") for item in promotion_items if item.get("logic") and item.get("owner_agent") == "exit_policy_optimizer"]
+        if validation_targets:
+            add_spec(
+                specs,
+                source="strategy_director",
+                title="Validate replacement strategy promotion queue",
+                runner_task="validation_probe",
+                targets=validation_targets[:6],
+                priority="high",
+                success_criteria={"fresh_validation_samples": "> 0", "promotion_decision": "promote_or_retire"},
+                evidence={"source_bottleneck": strategy_director.get("bottleneck"), "promotion_queue": promotion_items[:6]},
+            )
+        if exit_targets:
+            add_spec(
+                specs,
+                source="strategy_director",
+                title="Retest exit policy for promotion queue candidates",
+                runner_task="exit_policy_optimizer",
+                targets=exit_targets[:3],
+                priority="high",
+                success_criteria={"recent_avg_excess_return_pct": ">= 0", "p10_excess_return_pct": "> -8"},
+                evidence={"source_bottleneck": strategy_director.get("bottleneck"), "promotion_queue": promotion_items[:6]},
+            )
 
     for item in (escalation.get("bold_experiments") or [])[:4]:
         title = item.get("title") or item.get("name") or item.get("experiment") or "Bold paper-only experiment"

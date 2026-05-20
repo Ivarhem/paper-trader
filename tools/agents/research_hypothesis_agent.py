@@ -43,9 +43,31 @@ def experiment_history():
         by_family_type[(fam, e.get('experiment_type'))]=e
     return {'exact':latest,'by_family_type':by_family_type}
 
+def result_metric_delta(entry):
+    metrics_list=(entry or {}).get('result_metrics') or []
+    if isinstance(metrics_list, dict):
+        metrics_list=[metrics_list]
+    for metrics in metrics_list:
+        if not isinstance(metrics, dict):
+            continue
+        saved=metrics.get('saved') if isinstance(metrics.get('saved'),dict) else {}
+        for key in ('inserted','updated','audited_items','sample_count'):
+            try:
+                if float(metrics.get(key) or 0) > 0:
+                    return True
+            except Exception:
+                pass
+        for key in ('inserted','updated'):
+            try:
+                if float(saved.get(key) or 0) > 0:
+                    return True
+            except Exception:
+                pass
+    return False
+
 def has_meaningful_delta(entry):
     d=(entry or {}).get('delta') or {}
-    return bool(d.get('strategies') or d.get('recommendations'))
+    return bool(d.get('strategies') or d.get('recommendations') or result_metric_delta(entry))
 
 def is_stale_repeat(entry):
     # If an experiment is seen again without a fresh state delta, rotate away

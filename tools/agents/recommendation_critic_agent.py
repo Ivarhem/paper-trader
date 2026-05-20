@@ -28,7 +28,11 @@ def critique(row):
     if disc.get('high',0)>0 or disclosure_effective_medium(disc)>=2:
         msg=f"공시 리스크가 있습니다(H:{disc.get('high',0)} effective M:{disclosure_effective_medium(disc)})"; issues.append(msg); blocking.append(msg)
     if (row.get('upside_1_pct') or 0) < abs(row.get('downside_stop_pct') or 0):
-        msg='1차 목표 여력이 손절 위험보다 작습니다'; issues.append(msg); blocking.append(msg)
+        # Reward/risk is a sizing and validation signal, not a hard safety veto.
+        # The current target/stop policy can make this true for most candidates,
+        # so treating it as blocking collapses the gate into a non-discriminating
+        # "reject everything" rule.
+        msg='1차 목표 여력이 손절 위험보다 작습니다'; issues.append(msg); quality.append(msg)
     if fq.get('warnings'):
         msg='재무 품질 경고: ' + ', '.join(fq.get('warnings', [])[:2]); issues.append(msg); blocking.append(msg)
     if (fq.get('score_adjustment') or 0) <= -20:
@@ -51,6 +55,8 @@ def critique(row):
         tasks.append({'task':'retest_positive_excess_or_replace_logic','priority':'medium','reason':'active 전략 평균 초과수익 부족'})
     if (vb.get('avg_excess_win_rate_pct') or 0) < 52:
         tasks.append({'task':'retest_best_logic_win_rate','priority':'medium','reason':'초과승률 부족'})
+    if (row.get('upside_1_pct') or 0) < abs(row.get('downside_stop_pct') or 0):
+        tasks.append({'task':'review_reward_risk_sizing','priority':'medium','reason':'1차 목표/손절 비대칭은 차단보다 진입가·포지션 크기 검증으로 처리'})
     if row.get('market_issue_context'):
         tasks.append({'task':'track_market_issue_outcome','priority':'medium','reason':'시장 이슈 성과 추적'})
     return {'symbol':row['symbol'],'severity':severity,'issue_type':issue_type,'issues':issues,'blocking_issues':blocking,'under_validated_issues':under,'quality_issues':quality,'validation_tasks':tasks,'watch_reason':row.get('watch_reason'),'summary':' / '.join(issues[:3]) if issues else '뚜렷한 반대 근거는 제한적입니다'}

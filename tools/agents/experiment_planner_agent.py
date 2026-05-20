@@ -27,6 +27,75 @@ def current_validation_cmd(batch_size='600', symbol_limit='32', logic_limit='14'
         '--fund-consensus-boost',
     ]
 
+
+def ledger_key(target, experiment_type):
+    import hashlib
+    return hashlib.sha1(f'{target}|{experiment_type}'.encode()).hexdigest()[:12]
+
+def result_metric_delta(entry):
+    metrics_list=(entry or {}).get('result_metrics') or []
+    if isinstance(metrics_list, dict):
+        metrics_list=[metrics_list]
+    for metrics in metrics_list:
+        if not isinstance(metrics, dict):
+            continue
+        saved=metrics.get('saved') if isinstance(metrics.get('saved'),dict) else {}
+        for key in ('inserted','updated','audited_items','sample_count'):
+            try:
+                if float(metrics.get(key) or 0) > 0:
+                    return True
+            except Exception:
+                pass
+        for key in ('inserted','updated'):
+            try:
+                if float(saved.get(key) or 0) > 0:
+                    return True
+            except Exception:
+                pass
+    return False
+
+def has_meaningful_delta(entry):
+    d=(entry or {}).get('delta') or {}
+    return bool(d.get('strategies') or d.get('recommendations') or result_metric_delta(entry))
+
+def load_repeat_history():
+    data=read_json('/tmp/research_experiment_ledger.json')
+    return {e.get('experiment_key'):e for e in data.get('entries') or [] if e.get('experiment_key')}
+
+def repeat_suppression_reason(entry):
+    if not entry:
+        return None
+    if has_meaningful_delta(entry):
+        return None
+    if entry.get('repeated') is True or int(entry.get('repeat_seen_count') or 0) > 0:
+        return 'repeated_without_measurable_delta'
+    if entry.get('last_repeat_reason') or entry.get('last_seen_at'):
+        return 'ledger_repeat_without_delta'
+    return None
+
+def filter_repeated_targets(plan, repeat_history, suppressed):
+    targets=[str(t) for t in (plan.get('targets') or ([plan.get('target')] if plan.get('target') else [])) if t]
+    exp=plan.get('experiment_type') or plan.get('runner_task') or plan.get('task')
+    if not targets:
+        if plan.get('task') in ('run_validation_probe','run_theme_spillover_backtest'):
+            suppressed.append({'plan':plan.get('hypothesis_id') or plan.get('spec_id'), 'task':plan.get('task'), 'reason':'no_executable_targets'})
+            return None
+        return plan
+    kept=[]
+    for target in targets:
+        entry=repeat_history.get(ledger_key(target, exp))
+        reason=repeat_suppression_reason(entry)
+        if reason:
+            suppressed.append({'target':target,'experiment_type':exp,'task':plan.get('task'),'prior_run_at':entry.get('run_at'),'repeat_seen_count':entry.get('repeat_seen_count',0),'reason':reason})
+        else:
+            kept.append(target)
+    if not kept and (plan.get('task') or '').startswith('run_'):
+        return None
+    q=dict(plan)
+    q['targets']=kept
+    q['target']=kept[0] if kept else plan.get('target')
+    return q
+
 def plan_for(h):
     et=h.get('experiment_type'); target=h.get('target'); owner=h.get('owner_agent')
     base={'hypothesis_id':h.get('id'),'priority':h.get('priority'),'target':target,'experiment_type':et,'owner_agent':owner,'real_trading':False,'authority':'bounded_diagnostic_only','success_criteria':h.get('success_criteria'),'expected_improvement':h.get('expected_improvement')}
@@ -110,6 +179,13 @@ def main():
             key=(h.get('experiment_type'),h.get('target'))
             if key in seen: continue
             seen.add(key); plans.append(plan_for(h))
+    repeat_history=load_repeat_history(); suppressed=[]
+    filtered=[]
+    for p in plans:
+        q=filter_repeated_targets(p, repeat_history, suppressed)
+        if q:
+            filtered.append(q)
+    plans=filtered
     # Collapse duplicate owner commands to a smaller safe action set while keeping hypothesis links.
     grouped=[]; by_task={}
     for p in plans:
@@ -136,7 +212,8 @@ def main():
                 by_task[k]['cmd']=['python3','tools/agents/theme_spillover_backtest_agent.py']
                 if targets:
                     by_task[k]['cmd'] += ['--theme',','.join(targets)]
-    packet={'run_at':now(),'mode':'bounded_experiment_planning','source':'compiled_specs' if specs else 'hypotheses','real_trading':False,'authority':'plan_only','plans':grouped[:8],'raw_plan_count':len(plans),'summary':{'plan_count':min(len(grouped),8),'raw_plan_count':len(plans),'compiled_spec_count':len(specs),'high_priority_count':sum(1 for p in grouped[:8] if p.get('priority')=='high')}}
-    attach_contract(packet,'experiment_planner',status='ok',outputs={'plan_count':len(packet['plans'])},metrics=packet['summary'],warnings=[],next_actions=['Research Director/Orchestrator may execute safe diagnostic commands; do not apply policy changes directly.'])
+    packet={'run_at':now(),'mode':'bounded_experiment_planning','source':'compiled_specs' if specs else 'hypotheses','real_trading':False,'authority':'plan_only','plans':grouped[:8],'raw_plan_count':len(plans),'suppressed_repeats':suppressed[:20],'summary':{'plan_count':min(len(grouped),8),'raw_plan_count':len(plans),'compiled_spec_count':len(specs),'high_priority_count':sum(1 for p in grouped[:8] if p.get('priority')=='high'),'suppressed_repeat_count':len(suppressed)}}
+    warnings=['suppressed_repeated_experiments'] if suppressed else []
+    attach_contract(packet,'experiment_planner',status='ok',outputs={'plan_count':len(packet['plans']),'suppressed_repeat_count':len(suppressed)},metrics=packet['summary'],warnings=warnings,next_actions=['Research Director/Orchestrator may execute safe diagnostic commands; do not apply policy changes directly.'])
     Path(args.output).write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8'); print(json.dumps(packet,ensure_ascii=False,indent=2))
 if __name__=='__main__': main()

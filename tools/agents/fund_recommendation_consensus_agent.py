@@ -17,19 +17,60 @@ def yday_utc():
 def trade_date(tr):
     return str(tr.get('date') or tr.get('run_at') or '')[:10]
 
+def fund_risk_guardrails(risk):
+    guardrails={}
+    for row in risk.get('findings') or []:
+        fid=row.get('fund_id')
+        if not fid:
+            continue
+        entry=guardrails.setdefault(fid, {'issues': [], 'allocation_cap_multiplier': 1.0, 'blocked': False})
+        issue=row.get('issue')
+        entry['issues'].append({k: row.get(k) for k in ('issue','severity','mdd_pct','trades_per_day') if row.get(k) is not None})
+        if row.get('severity') == 'block':
+            entry['blocked'] = True
+            entry['allocation_cap_multiplier'] = min(entry['allocation_cap_multiplier'], 0.0)
+        elif issue == 'mdd_high':
+            entry['allocation_cap_multiplier'] = min(entry['allocation_cap_multiplier'], 0.45)
+        elif issue == 'turnover_high':
+            try:
+                tpd = float(row.get('trades_per_day') or 0)
+            except Exception:
+                tpd = 0.0
+            cap = max(0.25, min(1.0, 4.0 / tpd)) if tpd else 0.60
+            entry['allocation_cap_multiplier'] = min(entry['allocation_cap_multiplier'], cap)
+    for fid, entry in guardrails.items():
+        entry['allocation_cap_multiplier'] = round(float(entry.get('allocation_cap_multiplier') or 0), 2)
+        entry['policy'] = 'paper_only_allocation_cap_not_standalone_signal'
+    return guardrails
+
 def main():
     asof=yday_utc()
     perf=load('/tmp/fund_performance_evaluator_latest.json',{})
     risk=load('/tmp/fund_risk_guardian_latest.json',{})
+    risk_guardrails=fund_risk_guardrails(risk)
     price=load('/tmp/paper_fund_price_replay_latest.json',{})
     live=load('/tmp/paper_fund_simulator_latest.json',{})
     recs=load('/tmp/recommendations_latest.json',{})
     rec_by_symbol={r.get('symbol'):r for r in recs.get('items') or []}
-    top=[f for f in (perf.get('evaluations') or []) if f.get('tier') in ('champion','candidate')][:12]
+    top=[]
+    for f in (perf.get('evaluations') or []):
+        if f.get('tier') not in ('champion','candidate'):
+            continue
+        guard=risk_guardrails.get(f.get('id')) or {}
+        if guard.get('blocked'):
+            continue
+        ff=dict(f)
+        if guard:
+            ff['fund_risk_guardrail']=guard
+        top.append(ff)
+        if len(top) >= 12:
+            break
     if not top:
-        top=(perf.get('summary') or {}).get('top_fund') and [(perf.get('summary') or {}).get('top_fund')] or []
+        candidate=(perf.get('summary') or {}).get('top_fund')
+        top=[candidate] if candidate and not (risk_guardrails.get(candidate.get('id')) or {}).get('blocked') else []
     top_ids={f.get('id') for f in top if f.get('id')}
     top_quality={f.get('id'):float(f.get('fund_quality_score') or max(1,float(f.get('return_pct') or 0))) for f in top if f.get('id')}
+    top_quality_cap={f.get('id'):(risk_guardrails.get(f.get('id')) or {}).get('allocation_cap_multiplier', 1.0) for f in top if f.get('id')}
     rows=collections.defaultdict(lambda:{'symbol':None,'buy_fund_count':0,'holding_fund_count':0,'weighted_score':0.0,'participating_funds':[],'fund_styles':collections.Counter(),'latest_buy_date':None,'sources':collections.Counter(),'buy_reasons':collections.Counter(),'fund_details':[]})
     # Yesterday / latest-available price replay buys. If yesterday has no data, use the latest replay date <= today.
     price_trades=price.get('trades') or []
@@ -44,13 +85,15 @@ def main():
         row=rows[sym]; row['symbol']=sym
         if fid not in row['participating_funds']:
             row['buy_fund_count']+=1; row['participating_funds'].append(fid)
-        row['weighted_score'] += max(1, top_quality.get(fid, 5)/10)
+        cap=float(top_quality_cap.get(fid, 1.0) or 1.0)
+        row['weighted_score'] += max(1, top_quality.get(fid, 5)/10) * cap
         style=next((f.get('style') for f in top if f.get('id')==fid), None)
         if style: row['fund_styles'][style]+=1
         row['latest_buy_date']=max(row['latest_buy_date'] or trade_date(tr), trade_date(tr))
         row['sources']['price_replay_yday_buy']+=1
         if tr.get('reason'): row['buy_reasons'][tr.get('reason')]+=1
-        row['fund_details'].append({'fund_id':fid,'style':style,'buy_date':trade_date(tr),'buy_price':tr.get('price'),'reason':tr.get('reason'),'score':tr.get('score'),'quality':round(top_quality.get(fid,0),2)})
+        guard=risk_guardrails.get(fid) or {}
+        row['fund_details'].append({'fund_id':fid,'style':style,'buy_date':trade_date(tr),'buy_price':tr.get('price'),'reason':tr.get('reason'),'score':tr.get('score'),'quality':round(top_quality.get(fid,0),2),'risk_cap_multiplier':guard.get('allocation_cap_multiplier',1.0),'risk_issues':guard.get('issues') or []})
     # Live holdings as secondary current asset context.
     live_state=load('/tmp/paper_fund_league_state.json',{})
     for f in live_state.get('funds') or []:
@@ -60,7 +103,7 @@ def main():
             row=rows[sym]; row['symbol']=sym
             if fid not in row['participating_funds']: row['participating_funds'].append(fid)
             row['holding_fund_count']+=1
-            row['weighted_score']+=max(1,top_quality.get(fid,3)/12)
+            row['weighted_score']+=max(1,top_quality.get(fid,3)/12) * float(top_quality_cap.get(fid, 1.0) or 1.0)
             if f.get('style'): row['fund_styles'][f.get('style')]+=1
             row['sources']['live_holding']+=1
     items=[]
@@ -86,11 +129,14 @@ def main():
             'last_price':rec.get('last_price'),
             'name':rec.get('name'),
             'market':rec.get('market'),
+            'risk_guardrail_policy':'fund risk findings cap fund contribution weight; they do not create standalone trade signals',
+            'risk_capped_funds':[fid for fid in row['participating_funds'] if (risk_guardrails.get(fid) or {}).get('allocation_cap_multiplier', 1.0) < 1.0],
             'caveat':'paper-only fund consensus; not real trading authority',
         }
         items.append(item)
     items=sorted(items,key=lambda x:(x['weighted_score'],x['buy_fund_count'],x['holding_fund_count']),reverse=True)
-    packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'fund_recommendation_consensus','real_trading':False,'authority':'paper_only_yesterday_top_fund_consensus','asof_date':basis_date,'item_count':len(items),'items':items,'summary':{'top_symbols':[x['symbol'] for x in items[:10]],'item_count':len(items),'top_weighted_score':items[0]['weighted_score'] if items else None,'basis':'latest available daily fund buy consensus, normally yesterday close'},'warnings':['uses_price_replay_top_fund_buy_proxy_until_live_holdings_mature'],'next_actions':['Use this as the primary recommendation view; keep recommendation/risk gate state visible as a guardrail.']}
+    capped_fund_ids=sorted({fid for x in items for fid in (x.get('risk_capped_funds') or [])})
+    packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'fund_recommendation_consensus','real_trading':False,'authority':'paper_only_yesterday_top_fund_consensus','asof_date':basis_date,'item_count':len(items),'items':items,'summary':{'top_symbols':[x['symbol'] for x in items[:10]],'item_count':len(items),'risk_capped_fund_count':len(capped_fund_ids),'top_weighted_score':items[0]['weighted_score'] if items else None,'basis':'latest available daily fund buy consensus, normally yesterday close'},'risk_guardrail_policy':'fund risk findings cap consensus weight/allocation; they do not create standalone buy/sell signals','warnings':['uses_price_replay_top_fund_buy_proxy_until_live_holdings_mature'],'next_actions':['Use this as the primary recommendation view; keep recommendation/risk gate state visible as a guardrail.']}
     attach_contract(packet,'fund_recommendation_consensus_agent',status='ok',outputs={'item_count':len(items)},metrics=packet['summary'],warnings=packet['warnings'],next_actions=packet['next_actions'])
     Path('/tmp/fund_recommendation_consensus_latest.json').write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')
     Path(ROOT/'static/fund_recommendation_consensus_latest.json').write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')

@@ -18,6 +18,12 @@ DART_FIN_OUT=/tmp/market_data_opendart_financials_${USER:-clawd}.out
 DART_FIN_ERR=/tmp/market_data_opendart_financials_${USER:-clawd}.err
 export MOVER_OUT MOVER_ERR UPPER_BACKFILL_OUT UPPER_BACKFILL_ERR PRICE_OUT PRICE_ERR DART_DISC_OUT DART_DISC_ERR SEC_DISC_OUT SEC_DISC_ERR DART_FIN_OUT DART_FIN_ERR
 LOG_PREFIX="$(date -Is)"
+PAUSE_GUARD=scripts/batch_pause_guard.py
+
+if ! python3 "$PAUSE_GUARD" check --task-id market-data-freshness --owner cron:market_data_freshness --skip-status "$STATUS" >/dev/null; then
+  echo "$LOG_PREFIX market data freshness skip source edit pause"
+  exit 0
+fi
 
 load=$(cut -d" " -f1 /proc/loadavg)
 if awk "BEGIN {exit !($load > 4.0)}"; then
@@ -43,7 +49,7 @@ fi
 set +e
 flock -n "$LOCK" bash -c '
   set -euo pipefail
-  .venv/bin/python tools/agents/market_mover_seed_agent.py --limit-per-market 80 --stock-only > "$MOVER_OUT" 2>"$MOVER_ERR"
+  .venv/bin/python tools/agents/market_mover_seed_agent.py --limit-per-market 160 --us-limit 160 --stock-only > "$MOVER_OUT" 2>"$MOVER_ERR"
   upper_symbols=$(cat /tmp/market_mover_upper_limit_symbols.txt 2>/dev/null || true)
   if [ -n "$upper_symbols" ]; then
     .venv/bin/python tools/agents/import_stooq_daily.py --start 2019-01-01 --symbols "$upper_symbols" > "$UPPER_BACKFILL_OUT" 2>"$UPPER_BACKFILL_ERR"

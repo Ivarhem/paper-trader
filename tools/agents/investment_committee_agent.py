@@ -79,10 +79,24 @@ def load_fund_org_context():
     except Exception:
         return {}
 
+def load_fund_recommendation_context():
+    try:
+        return json.loads(Path('/tmp/fund_recommendation_consensus_latest.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
 def fund_overlay_for_symbol(symbol, packet):
     for row in (packet.get('symbol_consensus') or []):
         if row.get('symbol') == symbol:
             return row
+    return {}
+
+def fund_recommendation_overlay_for_symbol(symbol, packet):
+    for idx, row in enumerate(packet.get('items') or [], start=1):
+        if row.get('symbol') == symbol:
+            out = dict(row)
+            out['rank'] = idx
+            return out
     return {}
 
 def load_weights():
@@ -250,23 +264,64 @@ COMMITTEE_FILL_ASSUMPTIONS={
 }
 
 
+ROLE_BEHAVIOR={
+    'upside_hunter': {
+        'mandate': '매수 근거와 upside 비대칭을 먼저 찾되, hard risk는 승인권자가 아니라 Risk Gate로 이관',
+        'support_at': 62,
+        'watch_at': 38,
+    },
+    'risk_guardian': {
+        'mandate': '손실 제한과 hard blocker를 판정하는 거부권 성격의 리스크 전담',
+        'support_at': 68,
+        'watch_at': 45,
+    },
+    'evidence_skeptic': {
+        'mandate': '검증 품질과 과최적화 가능성을 따지는 증거 전담',
+        'support_at': 68,
+        'watch_at': 45,
+    },
+    'balanced_allocator': {
+        'mandate': '보상/위험/점수 균형으로 paper allocation 적합성을 평가',
+        'support_at': 66,
+        'watch_at': 45,
+    },
+    'regime_specialist': {
+        'mandate': '시장 국면이 진입 가격과 보유 기간에 주는 영향을 평가',
+        'support_at': 66,
+        'watch_at': 43,
+    },
+    'research_advocate': {
+        'mandate': '신규 가설, 테마, under-validated 후보를 차단보다 연구 큐로 올리는 역할',
+        'support_at': 60,
+        'watch_at': 35,
+    },
+}
+
+
 def opinion(label, agent, score, supports, concerns):
     score=round(max(0,min(100,score)),2)
-    op='support' if score>=68 else ('watch' if score>=45 else 'oppose')
+    behavior=ROLE_BEHAVIOR.get(agent, {})
+    op='support' if score>=behavior.get('support_at',68) else ('watch' if score>=behavior.get('watch_at',45) else 'oppose')
     fill=COMMITTEE_FILL_ASSUMPTIONS.get(agent, {'profile':'neutral','fill_model':'close_only','rule':'현재 기준/종가 판정'})
     supports=[f"검증기준: {fill['rule']}"] + supports
-    return {'agent':agent,'label':label,'score':score,'opinion':op,'fill_assumption':fill,'supports':supports[:4],'concerns':concerns[:4]}
+    return {'agent':agent,'label':label,'score':score,'opinion':op,'role_mandate':behavior.get('mandate'),'fill_assumption':fill,'supports':supports[:4],'concerns':concerns[:4]}
 
 
 def upside_hunter(row):
     c=base_ctx(row); s=50; sup=[]; con=[]
     if c['upside'] >= max(5,c['downside']*1.25): s+=22; sup.append(f'상승/손절 비대칭 우수 {c["upside"]:.1f}%/{c["downside"]:.1f}%')
-    else: s-=12; con.append('상승 여력이 손절 위험 대비 부족')
+    else:
+        s-=12
+        con.append('추격매수 보상/손절 비율 부족')
     if c['score']>=60: s+=10; sup.append('기초 점수 60 이상')
     if pct(c['vb'].get('symbol_60d_return_pct'))>8: s+=8; sup.append('60일 가격 탄력 양호')
     if pct(c['vb'].get('avg_active_excess_return_pct'))>0: s+=8; sup.append('전략 초과수익 양수')
-    if 'left_tail_excess_risk' in c['flags']: s-=12; con.append('하방 꼬리 위험')
-    if c['disc'].get('high',0)>0: s-=25; con.append('고위험 공시')
+    mover=(c['vb'].get('mover_context') or row.get('mover_context') or {})
+    if pct(mover.get('change_pct')) >= 8: s+=6; sup.append('당일/단기 수급성 가격 탄력')
+    if c['disc'].get('high',0)>0:
+        s-=8; con.append('고위험 공시는 Risk Gate 확인 필요')
+    if 'left_tail_excess_risk' in c['flags']:
+        s-=6; con.append('하방 꼬리 위험은 가격조건으로 보정 필요')
     return opinion('공격형', 'upside_hunter', s, sup, con)
 
 
@@ -330,12 +385,57 @@ def research_advocate(row):
     if (mc.get('impact_score') or 0) >= 70:
         s += 8; sup.append('선행 시장 컨텍스트 확인')
     if (c['critic'].get('issue_type') == 'under_validated'):
-        s += 6; sup.append('차단보다 검증대기 성격')
+        s += 14; sup.append('검증 부족은 차단보다 신규 연구 큐 성격')
+    if (c['vb'].get('symbol_validation_sample_count') or 0) < 10:
+        s += 6; sup.append('종목별 표본 부족: 신규 전략/전용 검증 선호')
+    if (c['vb'].get('positive_symbol_edge_count') or 0) <= 0 and c['score'] >= 65:
+        s += 5; sup.append('기초 후보 점수 대비 edge 미확인: 새 가설 후보')
     if c['disc'].get('high',0)>0:
-        s -= 24; con.append('고위험 공시')
+        s -= 10; con.append('공시 리스크는 연구 가능하나 매수 승인은 Risk Gate 필요')
     if c['downside'] > 10:
-        s -= 8; con.append('손절폭 부담')
+        s -= 4; con.append('손절폭 부담은 실험 포지션 축소 필요')
     return opinion('Research형', 'research_advocate', s, sup, con)
+
+def market_committee_context(row, research_decision, risk_gate_decision, opinions):
+    vb = row.get('validation_basis') or {}
+    mover = vb.get('mover_context') or row.get('mover_context') or {}
+    tech = vb.get('technical_risk_context') or row.get('technical_risk_context') or {}
+    benchmark5 = pct(vb.get('benchmark_5d_return_pct'))
+    benchmark20 = pct(vb.get('benchmark_20d_return_pct'))
+    symbol20 = pct(vb.get('symbol_20d_return_pct'))
+    symbol60 = pct(vb.get('symbol_60d_return_pct'))
+    volume = pct(vb.get('volume_ratio_20d') or row.get('volume_ratio_20d'))
+    mover_change = pct(mover.get('change_pct'))
+    flags = set((vb.get('audit_quality_flags') or []))
+    stress = []
+    if benchmark5 <= -3:
+        stress.append(f'지수 5D {benchmark5:.1f}%')
+    if tech.get('overheated_chase_risk') or symbol20 >= 20 or symbol60 >= 35 or mover_change >= 15:
+        stress.append('단기 급등/추격 위험')
+    if 0 < volume < 0.7:
+        stress.append(f'거래량 {volume:.2f}x')
+    if 'unfavorable_payoff_asymmetry' in flags:
+        stress.append('보상/손절 비대칭 약함')
+    if 'no_positive_average_excess' in flags or 'weak_success_confidence_interval' in flags:
+        stress.append('검증 edge 약함')
+    if not stress:
+        stress.append('시장/검증 조건 중립')
+    upside = next((o for o in opinions if o.get('agent') == 'upside_hunter'), {})
+    if upside.get('opinion') == 'support':
+        aggressive_note = '공격형은 상승 탄력 자체는 인정해 연구 지지 쪽에 섰습니다.'
+    elif risk_gate_decision != 'pass':
+        aggressive_note = '공격형도 상승 탄력은 인정하지만 지금 가격에서는 추격매수보다 검증/가격조건 대기를 선택했습니다.'
+    else:
+        aggressive_note = '공격형은 조건부 관찰이며, Risk Gate 통과 여부가 최종 승인 조건입니다.'
+    approval_note = (
+        'Fund 합의는 종목을 올리는 1차 근거이고, 위원회는 이를 매수 승인과 분리해 검증합니다. '
+        f'Research={research_decision}, Risk Gate={risk_gate_decision}.'
+    )
+    return {
+        'market_stress_reasons': stress[:4],
+        'aggressive_note': aggressive_note,
+        'approval_note': approval_note,
+    }
 
 EVALUATORS=[upside_hunter,risk_guardian,evidence_skeptic,balanced_allocator,regime_specialist,research_advocate]
 
@@ -366,9 +466,33 @@ def synthesize(row, opinions, weights):
     blocking_critic = critic.get('issue_type') == 'blocking' or critic.get('severity') == 'high'
     hard_risk = blocking_critic or (disc.get('high',0)>0) or row.get('corporate_action_risk',{}).get('flagged') or (fq.get('score_adjustment') or 0) <= -20
     under_validated = critic.get('issue_type') == 'under_validated' or (vb.get('symbol_validation_sample_count') or 0) < 10 or (vb.get('positive_symbol_edge_count') or 0) <= 0
+    fund_packet=load_fund_org_context()
+    fund_overlay=fund_overlay_for_symbol(row.get('symbol'), fund_packet)
+    fund_recommendation_packet=load_fund_recommendation_context()
+    fund_recommendation_overlay=fund_recommendation_overlay_for_symbol(row.get('symbol'), fund_recommendation_packet)
+    fund_primary_candidate=bool(fund_recommendation_overlay)
+    fund_allocation_guardrail = {
+        'policy': (fund_recommendation_overlay or {}).get('risk_guardrail_policy') or 'fund risk findings cap consensus weight only',
+        'risk_capped_funds': (fund_recommendation_overlay or {}).get('risk_capped_funds') or [],
+        'cap_applied': bool((fund_recommendation_overlay or {}).get('risk_capped_funds')),
+    }
+    if fund_primary_candidate and not hard_risk:
+        # The committee now treats champion paper-fund agreement as the primary
+        # reason to review a symbol. This can raise it into research review, but
+        # it cannot pass the risk layer or hard blockers by itself. Fund risk caps
+        # are already reflected in weighted_score, then surfaced here as sizing guardrails.
+        research_score = max(research_score, min(82.0, 54.0 + float(fund_recommendation_overlay.get('weighted_score') or 0) * 0.18 + int(fund_recommendation_overlay.get('buy_fund_count') or 0) * 1.4))
+        score = round((research_score*0.55)+(risk_score*0.45),2)
     # Layer 1: is this worth paper research attention?
-    if hard_risk and research_score < 70:
+    # Hard risk blocks paper-buy approval, but it should not erase the research
+    # desk's role. Strong upside/research interest remains a watch/research item
+    # so the organization can learn from it without implying trade eligibility.
+    if hard_risk and research_score >= 55:
+        research_decision='watch'
+    elif hard_risk:
         research_decision='ignore'
+    elif fund_primary_candidate and not hard_risk:
+        research_decision='support'
     elif research_score >= 58 or (row.get('score') or 0) >= 70 or research_support >= 1:
         research_decision='support'
     elif research_score >= 45:
@@ -378,7 +502,7 @@ def synthesize(row, opinions, weights):
     # Layer 2: is it safe/validated enough for paper trade eligibility?
     if hard_risk:
         risk_gate_decision='blocked'
-    elif risk_score >= 62 and not under_validated and risk_oppose == 0:
+    elif risk_score >= 62 and not under_validated and risk_oppose == 0 and not fund_allocation_guardrail.get('cap_applied'):
         risk_gate_decision='pass'
     elif risk_score >= 35 or under_validated:
         risk_gate_decision='needs_more_validation'
@@ -395,14 +519,111 @@ def synthesize(row, opinions, weights):
         decision='reject'
     hard_oppose={o['agent'] for o in risk_rows if o['opinion']=='oppose'}
     leaders=sorted(active,key=lambda o:o['score'],reverse=True)
-    fund_packet=load_fund_org_context(); fund_overlay=fund_overlay_for_symbol(row.get('symbol'), fund_packet)
-    if fund_overlay and decision in ('watch','reject') and risk_gate_decision != 'blocked':
+    if (fund_overlay or fund_recommendation_overlay) and decision in ('watch','reject') and risk_gate_decision != 'blocked':
         decision='research_support'
-    summary=(f"FundRiskGate {risk_gate_decision}({risk_score}) / Research {research_decision}({research_score}) → {decision}; "
-             f"상위펀드 합의 {fund_overlay.get('votes',0) if fund_overlay else 0}, 찬성 {support}, 반대 {oppose}; 최고 {leaders[0]['label']}={leaders[0]['opinion']}, 최저 {leaders[-1]['label']}={leaders[-1]['opinion']}")
+    context = market_committee_context(row, research_decision, risk_gate_decision, active)
+    voice_leaders=sorted(active,key=lambda o:weights.get(o['agent'],0),reverse=True)[:2]
+    voice_note=', '.join(f"{o['label']} {weights.get(o['agent'],0):.0%}" for o in voice_leaders)
+    summary=(f"RiskGate {risk_gate_decision}({risk_score}) / Research {research_decision}({research_score}) → {decision}; "
+             f"상위펀드 합의 {fund_overlay.get('votes',0) if fund_overlay else 0}, 고수익펀드 매수합의 {fund_recommendation_overlay.get('buy_fund_count',0) if fund_recommendation_overlay else 0}, "
+             f"fund cap {len(fund_allocation_guardrail.get('risk_capped_funds') or [])}, "
+             f"찬성 {support}, 반대 {oppose}; 성과발언권 {voice_note}; 최고 {leaders[0]['label']}={leaders[0]['opinion']}, 최저 {leaders[-1]['label']}={leaders[-1]['opinion']}")
+    readable_summary = f"{context['approval_note']} 성과 기반 발언권은 {voice_note} 순입니다. 공격형 해석: {context['aggressive_note']} 현재 보류 근거: {', '.join(context['market_stress_reasons'])}."
     return {'score':score,'decision':decision,'summary':summary,'support_count':support,'oppose_count':oppose,'hard_oppose_agents':sorted(hard_oppose),'weights':{o['agent']:weights.get(o['agent'],0) for o in active},'fill_assumptions':{o['agent']:o.get('fill_assumption') for o in active},
-            'fund_consensus':fund_overlay,'research_committee':{'decision':research_decision,'score':research_score,'support_count':research_support,'oppose_count':research_oppose,'agents':[o['agent'] for o in research_rows]},
-            'risk_gate':{'decision':risk_gate_decision,'score':risk_score,'support_count':risk_support,'oppose_count':risk_oppose,'hard_risk':bool(hard_risk),'under_validated':bool(under_validated),'agents':[o['agent'] for o in risk_rows]}}
+            'readable_summary': readable_summary, 'market_context': context,
+            'fund_consensus':fund_overlay,'fund_recommendation_consensus':fund_recommendation_overlay,'fund_allocation_guardrail':fund_allocation_guardrail,'fund_primary_candidate':fund_primary_candidate,'research_committee':{'decision':research_decision,'score':research_score,'support_count':research_support,'oppose_count':research_oppose,'agents':[o['agent'] for o in research_rows]},
+            'risk_gate':{'decision':risk_gate_decision,'score':risk_score,'support_count':risk_support,'oppose_count':risk_oppose,'hard_risk':bool(hard_risk),'under_validated':bool(under_validated),'fund_cap_applied':bool(fund_allocation_guardrail.get('cap_applied')),'agents':[o['agent'] for o in risk_rows]}}
+
+
+def distance_pct(price, ref):
+    try:
+        price = float(price)
+        ref = float(ref)
+        if not price or not ref:
+            return None
+        return round((price / ref - 1) * 100, 2)
+    except Exception:
+        return None
+
+
+def price_posture(row: dict, synthesis: dict, gate: dict) -> dict:
+    """Convert committee context into UI price-highlight intent.
+
+    The committee should not pick a single magic price. It chooses a posture
+    from market/sector/symbol/risk context; the UI then highlights the price
+    fields that match the next paper-only action.
+    """
+    vb = row.get('validation_basis') or {}
+    tech = vb.get('technical_risk_context') or row.get('technical_risk_context') or {}
+    mover = vb.get('mover_context') or row.get('mover_context') or {}
+    risk_gate = synthesis.get('risk_gate') or {}
+    research = synthesis.get('research_committee') or {}
+    current = row.get('last_price') or row.get('analysis_price')
+    target_1 = row.get('target_1')
+    stop = row.get('stop_reference')
+    benchmark20 = pct(vb.get('benchmark_20d_return_pct'))
+    symbol20 = pct(vb.get('symbol_20d_return_pct'))
+    symbol60 = pct(vb.get('symbol_60d_return_pct'))
+    mover_change = pct(mover.get('change_pct'))
+    target_distance = distance_pct(target_1, current)
+    stop_distance = distance_pct(current, stop)
+
+    targets = ['entry_band', 'entry_lower', 'entry_upper']
+    posture = 'balanced'
+    reason = '시장/종목 맥락이 중립권이라 평균 진입 밴드를 우선 강조'
+
+    hard_block = bool(risk_gate.get('hard_risk')) or gate.get('recommendation_bucket') == 'rejected'
+    volatile = tech.get('atr_bucket') == 'high' or abs(mover_change) >= 12
+    overheated = bool(tech.get('overheated_chase_risk')) or benchmark20 >= 8 or symbol20 >= 12 or symbol60 >= 25 or mover_change >= 18
+    oversold_research = (
+        not hard_block
+        and research.get('decision') == 'support'
+        and (benchmark20 <= -5 or symbol20 <= -8 or symbol60 <= -15 or mover_change <= -12)
+    )
+
+    if target_distance is not None and 0 <= target_distance <= 2.5 and not hard_block:
+        posture = 'take_profit'
+        targets = ['target_1']
+        reason = f"1차 실현가까지 {target_distance}% 남아 실현 계획을 우선 강조"
+    elif stop_distance is not None and 0 <= stop_distance <= 3.0:
+        posture = 'avoid'
+        targets = ['stop_reference']
+        reason = f"무효화/손절 기준까지 {stop_distance}% 거리라 이탈 계획을 우선 강조"
+    elif hard_block:
+        posture = 'avoid'
+        targets = ['stop_reference', 'chase_above']
+        reason = '위원회/Risk Gate가 차단 또는 보류해 매입가보다 리스크 기준을 강조'
+    elif overheated:
+        posture = 'defensive'
+        targets = ['entry_band', 'entry_lower', 'stop_reference']
+        reason = '시장 또는 종목 단기 과열 신호가 있어 보수 진입/무효화 기준을 강조'
+    elif oversold_research:
+        posture = 'aggressive'
+        targets = ['entry_band', 'entry_upper', 'target_2']
+        reason = '단기 약세/과매도 구간에서 Research Committee 지지가 있어 공격 진입 밴드를 허용'
+    elif volatile:
+        posture = 'defensive'
+        targets = ['entry_band', 'entry_lower', 'stop_reference']
+        reason = '변동성이 커서 평균 진입보다 보수 밴드와 이탈 기준을 강조'
+
+    return {
+        'committee_posture': posture,
+        'posture_reason': reason,
+        'highlight_targets': targets,
+        'inputs': {
+            'benchmark_20d_return_pct': vb.get('benchmark_20d_return_pct'),
+            'symbol_20d_return_pct': vb.get('symbol_20d_return_pct'),
+            'symbol_60d_return_pct': vb.get('symbol_60d_return_pct'),
+            'atr_bucket': tech.get('atr_bucket'),
+            'overheated_chase_risk': tech.get('overheated_chase_risk'),
+            'mover_change_pct': mover.get('change_pct'),
+            'risk_gate_decision': risk_gate.get('decision'),
+            'research_decision': research.get('decision'),
+            'target_1_distance_pct': target_distance,
+            'stop_distance_pct': stop_distance,
+        },
+        'policy': 'committee_context_selects_posture_ui_highlights_not_price_vote',
+    }
 
 
 
@@ -422,6 +643,8 @@ def summarize_gate_reason(gate: dict) -> str:
         'weak_excess_win_rate':'초과승률 약함',
         'score_below_buy_gate':'점수 기준 미달',
         'risk_gate_needs_more_validation':'Risk Gate 추가 검증 필요',
+        'committee_watch':'위원회 관찰 판정',
+        'committee_reject':'위원회 보류 판정',
         'mover_seed_requires_validation':'금일 mover seed: 검증 우선순위 상향',
     }
     parts=[]
@@ -467,6 +690,8 @@ def committee_rationale(committee: dict) -> dict:
         short.append('반대 근거: ' + ' | '.join(oppose_bits))
     if syn.get('summary'):
         short.append('종합: ' + syn['summary'])
+    if syn.get('readable_summary'):
+        short.insert(0, syn['readable_summary'])
     return {
         'supporters': [{'agent':o.get('agent'),'label':o.get('label'),'score':o.get('score'),'supports':o.get('supports') or []} for o in supporters],
         'watchers': [{'agent':o.get('agent'),'label':o.get('label'),'score':o.get('score'),'supports':o.get('supports') or [],'concerns':o.get('concerns') or []} for o in watchers],
@@ -484,12 +709,20 @@ def trade_gate(row, synthesis):
     blockers=[]
     cautions=[]
     base_not_buy = row.get('action') != 'candidate_buy_zone'
-    if synthesis.get('decision') not in ('committee_support','research_support'):
-        blockers.append(f"committee_{synthesis.get('decision') or 'unknown'}")
+    risk_gate = synthesis.get('risk_gate') or {}
+    committee_decision = synthesis.get('decision') or 'unknown'
+    if committee_decision not in ('committee_support','research_support'):
+        gate_code = f"committee_{committee_decision}"
+        if risk_gate.get('hard_risk'):
+            blockers.append(gate_code)
+        else:
+            cautions.append(gate_code)
     elif synthesis.get('decision') == 'research_support':
         cautions.append('risk_gate_needs_more_validation')
-    if critic.get('severity') == 'high':
+    if critic.get('severity') == 'high' and critic.get('issue_type') == 'blocking':
         blockers.append('critic_high')
+    elif critic.get('severity') == 'high':
+        cautions.append('critic_high_not_hard_blocking')
     elif critic.get('issue_type') == 'under_validated' or critic.get('severity') == 'under_validated':
         cautions.append('under_validated_not_blocking')
     if (disc.get('high') or 0) > 0 or disclosure_effective_medium(disc) >= 3:
@@ -510,9 +743,9 @@ def trade_gate(row, synthesis):
     # not repeated as a per-candidate trade-gate caution.
     if (row.get('score') or 0) < 65:
         cautions.append('score_below_buy_gate')
-    if base_not_buy and synthesis.get('decision') not in ('research_support','committee_support'):
-        cautions.append('base_action_not_buy_candidate')
-    hard_blockers = [b for b in blockers if b not in ('committee_watch','committee_unknown')]
+    # base_not_buy is an aggregate recommendation-surface state. Repeating it on
+    # every card hides the concrete critic/risk reasons, so org_evaluator tracks
+    # it as an aggregate bottleneck instead of an item-level caution.
     research_watch = (not any(b in blockers for b in ('critic_high','disclosure_risk','corporate_action_risk','financial_hard_risk'))
                       and (row.get('score') or 0) >= 65
                       and ('under_validated_not_blocking' in cautions or (vb.get('symbol_validation_sample_count') or 0) < 10 or (vb.get('positive_symbol_edge_count') or 0) <= 0))
@@ -645,6 +878,16 @@ def main():
             row['committee_bucket_transition']=transition
         row['trade_gate']=gate
         row['validation_priority']=gate.get('validation_priority')
+        posture=price_posture(row, syn, gate)
+        syn['committee_posture']=posture['committee_posture']
+        syn['posture_reason']=posture['posture_reason']
+        syn['highlight_targets']=posture['highlight_targets']
+        syn['posture_inputs']=posture['inputs']
+        syn['highlight_policy']=posture['policy']
+        row['committee_posture']=posture['committee_posture']
+        row['posture_reason']=posture['posture_reason']
+        row['highlight_targets']=posture['highlight_targets']
+        row['price_highlight_policy']=posture['policy']
         human=row.get('human_summary') if isinstance(row.get('human_summary'), dict) else {}
         name=row.get('name') or row.get('symbol')
         if gate['recommendation_bucket'] == 'approved':
@@ -663,6 +906,7 @@ def main():
             human['headline']='관찰 유지, 추가 검증 대기'
             human['suggested_action']='추가 검증 결과가 쌓이는지 확인하며 관찰하세요.'
         human['committee_view']=rationale.get('plain_summary') or syn.get('summary') or human.get('committee_view') or ''
+        human['price_posture']=posture['posture_reason']
         if rationale.get('support_summary'):
             why = human.get('why_now') or ''
             support_sentence = '위원회 지지/관찰 근거: ' + rationale['support_summary'] + '.'

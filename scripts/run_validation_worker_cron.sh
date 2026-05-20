@@ -12,6 +12,13 @@ SIM_OUT=/tmp/simulation_validation_worker_cron_${USER:-clawd}.out
 SIM_ERR=/tmp/simulation_validation_worker_cron_${USER:-clawd}.err
 export CAPACITY_OUT CAPACITY_ERR SIM_OUT SIM_ERR
 LOG_PREFIX="$(date -Is)"
+PAUSE_GUARD=scripts/batch_pause_guard.py
+
+if ! python3 "$PAUSE_GUARD" check --task-id validation-worker --owner cron:validation_worker --skip-status "$STATUS" >/dev/null; then
+  echo "$LOG_PREFIX validation worker skip source edit pause"
+  cp -f /tmp/paper_trader_batch_pause_latest.json static/paper_trader_batch_pause_latest.json 2>/dev/null || true
+  exit 0
+fi
 
 load=$(cut -d" " -f1 /proc/loadavg)
 if awk "BEGIN {exit !($load > 4.0)}"; then

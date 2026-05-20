@@ -159,6 +159,19 @@ A read-only monitoring page is available at:
 
 It focuses on the bounded stock historical research loop: latest run summary, promoted walk-forward candidates, walk-forward results, and recent backtest runs.
 
+Before deploying recommendation monitor UI changes, run the lightweight card
+contract check:
+
+```bash
+python3 scripts/check_monitor_ui_contract.py
+node --check static/monitor.js
+```
+
+The contract check guards the recurring recommendation-card regressions:
+duplicated `Gate`/`Risk Gate` facts, current price moving back into the price
+plan section, broken price-plan section ordering, missing compact-card CSS, and
+collapsed stop percentages in the latest recommendation payload.
+
 
 ## Forward-test signals
 
@@ -410,4 +423,3 @@ See:
 - `tools/agents/research_pipeline_agent.py` — cron orchestrator
 
 Safety boundary: historical/paper research only; no real trading/orders.
-

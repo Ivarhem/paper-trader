@@ -25,7 +25,13 @@ def main():
         s=sector_hint(r['symbol'],r.get('name')); notes=[]
         if scnt[s]>=5: notes.append(f'{s} 노출 과다')
         if mcnt[market(r['symbol'])]>10: notes.append('시장별 후보 수 상한 확인 필요')
-        pr={'sector':s,'market':market(r['symbol']),'notes':notes,'max_position_hint_pct':3 if (r.get('confidence_grade') or {}).get('level')=='strong' else 1}
+        vb=r.get('validation_basis') or {}
+        fund_guard=vb.get('fund_allocation_guardrail') or {}
+        base_hint=3 if (r.get('confidence_grade') or {}).get('level')=='strong' else 1
+        if fund_guard.get('cap_applied'):
+            base_hint=min(base_hint, 1)
+            notes.append('fund turnover/MDD guardrail caps allocation hint')
+        pr={'sector':s,'market':market(r['symbol']),'notes':notes,'max_position_hint_pct':base_hint,'fund_allocation_guardrail':fund_guard}
         opinions.append({'symbol':r['symbol'],'agent':'portfolio_risk_manager','overlay':{'portfolio_risk':pr},'risk_notes_append':notes,'final_field_writer':False})
     packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'portfolio_risk_manager','market_counts':dict(mcnt),'sector_counts':dict(scnt),'warnings':warnings,'risk_off':risk_off,'opinions':opinions,'real_trading':False,'writes_recommendations_latest':False}
     Path('/tmp/portfolio_risk_latest.json').write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')

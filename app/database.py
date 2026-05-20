@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,9 +15,15 @@ from tools.agents.lib.fx import fx_rate_for_symbol, latest_usdkrw, price_to_krw
 
 settings = get_settings()
 
+VALUATION_CACHE_PATH = Path(os.getenv("PAPER_TRADER_VALUATION_CACHE", "/tmp/paper_trader_valuation_cache.json"))
+VALUATION_CACHE_TTL_SECONDS = int(os.getenv("PAPER_TRADER_VALUATION_CACHE_TTL_SECONDS", "21600"))
+VALUATION_MAX_FETCHES_PER_PROCESS = int(os.getenv("PAPER_TRADER_VALUATION_MAX_FETCHES_PER_PROCESS", "25"))
+_VALUATION_FETCHES_THIS_PROCESS = 0
+
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(settings.database_path)
+    conn = sqlite3.connect(settings.database_path, timeout=45)
+    conn.execute("PRAGMA busy_timeout=45000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -800,6 +807,180 @@ def save_financial_snapshot(snapshot: dict) -> bool:
     return True
 
 
+def _float_or_none(value) -> float | None:
+    if value in (None, "", "None"):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _load_valuation_cache() -> dict:
+    try:
+        return json.loads(VALUATION_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_valuation_cache(cache: dict) -> None:
+    try:
+        VALUATION_CACHE_PATH.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def latest_valuation_metrics(symbol: str, financial: dict | None = None) -> dict:
+    """Fetch a small cached valuation packet for scoring.
+
+    This is deliberately best-effort: recommendation generation must continue even
+    if yfinance is slow, unavailable, or missing a multiple for a KR ticker.
+    """
+    symbol = symbol.upper()
+    cache = _load_valuation_cache()
+    cached = cache.get(symbol) or {}
+    now = datetime.now(timezone.utc)
+    try:
+        fetched_at = datetime.fromisoformat(str(cached.get("fetched_at")).replace("Z", "+00:00"))
+    except Exception:
+        fetched_at = None
+    if fetched_at and (now - fetched_at).total_seconds() <= VALUATION_CACHE_TTL_SECONDS:
+        return cached.get("metrics") or {}
+
+    if cached.get("metrics") and fetched_at:
+        stale_metrics = dict(cached.get("metrics") or {})
+        stale_metrics["stale"] = True
+        stale_metrics["source"] = f"{stale_metrics.get('source') or 'yfinance_cached'}_stale"
+        if _valuation_fetch_cap_reached():
+            stale_metrics["refresh_deferred"] = "process_fetch_cap_reached"
+            return stale_metrics
+
+    metrics = {
+        "per": None,
+        "pbr": None,
+        "roe_pct": None,
+        "ev_ebitda": None,
+        "market_cap": None,
+        "dividend_yield_pct": None,
+        "source": "yfinance_cached",
+    }
+    if financial and financial.get("net_income") not in (None, 0) and financial.get("equity") not in (None, 0):
+        try:
+            metrics["roe_pct"] = round(float(financial["net_income"]) / float(financial["equity"]) * 100, 2)
+        except Exception:
+            pass
+    if _valuation_fetch_cap_reached():
+        metrics["source"] = "financial_snapshot_only_fetch_deferred"
+        metrics["refresh_deferred"] = "process_fetch_cap_reached"
+        return metrics
+    try:
+        import yfinance as yf
+
+        _increment_valuation_fetch_count()
+        info = yf.Ticker(symbol).get_info() or {}
+        per = _float_or_none(info.get("trailingPE") or info.get("forwardPE"))
+        pbr = _float_or_none(info.get("priceToBook"))
+        roe = _float_or_none(info.get("returnOnEquity"))
+        ev_ebitda = _float_or_none(info.get("enterpriseToEbitda"))
+        market_cap = _float_or_none(info.get("marketCap"))
+        dividend_yield = _float_or_none(info.get("dividendYield"))
+        if per is not None and per > 0:
+            metrics["per"] = round(per, 2)
+        if pbr is not None and pbr > 0:
+            metrics["pbr"] = round(pbr, 2)
+        if roe is not None:
+            metrics["roe_pct"] = round(roe * 100 if abs(roe) <= 2 else roe, 2)
+        if ev_ebitda is not None and ev_ebitda > 0:
+            metrics["ev_ebitda"] = round(ev_ebitda, 2)
+        if market_cap is not None:
+            metrics["market_cap"] = market_cap
+        if dividend_yield is not None:
+            metrics["dividend_yield_pct"] = round(dividend_yield * 100 if dividend_yield <= 0.2 else dividend_yield, 2)
+    except Exception as exc:
+        metrics["error"] = str(exc)[:180]
+
+    cache[symbol] = {"fetched_at": now.isoformat(), "metrics": metrics}
+    _save_valuation_cache(cache)
+    return metrics
+
+
+def _valuation_fetch_cap_reached() -> bool:
+    return VALUATION_MAX_FETCHES_PER_PROCESS >= 0 and _VALUATION_FETCHES_THIS_PROCESS >= VALUATION_MAX_FETCHES_PER_PROCESS
+
+
+def _increment_valuation_fetch_count() -> None:
+    global _VALUATION_FETCHES_THIS_PROCESS
+    _VALUATION_FETCHES_THIS_PROCESS += 1
+
+
+def valuation_score_adjustment(financial: dict, debt_ratio: float | None, op_margin: float | None, rev_growth: float | None) -> dict:
+    val = latest_valuation_metrics(str(financial.get("symbol") or ""), financial)
+    per = _float_or_none(val.get("per"))
+    pbr = _float_or_none(val.get("pbr"))
+    roe = _float_or_none(val.get("roe_pct"))
+    ev_ebitda = _float_or_none(val.get("ev_ebitda"))
+    score = 0
+    supports: list[str] = []
+    warnings: list[str] = []
+
+    if per is not None:
+        if 0 < per <= 8:
+            score += 4; supports.append(f"PER 저평가 {per}")
+        elif per <= 12:
+            score += 3; supports.append(f"PER 양호 {per}")
+        elif per <= 18:
+            score += 1; supports.append(f"PER 보통 {per}")
+        elif per >= 35:
+            score -= 4; warnings.append(f"PER 고평가 {per}")
+    if pbr is not None:
+        if pbr <= 0.8:
+            score += 4; supports.append(f"PBR 저평가 {pbr}")
+        elif pbr <= 1.2:
+            score += 3; supports.append(f"PBR 양호 {pbr}")
+        elif pbr <= 1.8:
+            score += 1; supports.append(f"PBR 보통 {pbr}")
+        elif pbr >= 4:
+            score -= 3; warnings.append(f"PBR 고평가 {pbr}")
+    if roe is not None:
+        if roe >= 15:
+            score += 4; supports.append(f"ROE 우수 {roe}%")
+        elif roe >= 8:
+            score += 2; supports.append(f"ROE 양호 {roe}%")
+        elif roe < 0:
+            score -= 5; warnings.append(f"ROE 음수 {roe}%")
+    if ev_ebitda is not None:
+        if ev_ebitda <= 6:
+            score += 2; supports.append(f"EV/EBITDA 저평가 {ev_ebitda}")
+        elif ev_ebitda >= 20:
+            score -= 2; warnings.append(f"EV/EBITDA 부담 {ev_ebitda}")
+
+    cheap_enough = (
+        (per is not None and per <= 12)
+        or (pbr is not None and pbr <= 1.2)
+        or (ev_ebitda is not None and ev_ebitda <= 7)
+    )
+    quality_ok = (
+        (financial.get("net_income") is None or float(financial.get("net_income") or 0) > 0)
+        and (op_margin is None or op_margin > 0)
+        and (debt_ratio is None or debt_ratio <= 250)
+        and (rev_growth is None or rev_growth > -15)
+    )
+    if cheap_enough and quality_ok and (roe is None or roe >= 8):
+        score += 4
+        supports.append("저평가+재무품질 composite 통과")
+    elif cheap_enough and not quality_ok:
+        score -= 4
+        warnings.append("저평가처럼 보이나 재무 훼손/value trap 주의")
+
+    return {
+        "score_adjustment": max(-10, min(15, score)),
+        "warnings": warnings,
+        "supports": supports,
+        "metrics": val,
+        "policy": "cached_per_pbr_roe_ev_ebitda_value_composite",
+    }
+
+
 def latest_financial_quality(symbol: str) -> dict | None:
     init_db()
     with get_connection() as conn:
@@ -845,9 +1026,16 @@ def latest_financial_quality(symbol: str) -> dict | None:
         supports.append(f"영업이익률 {op_margin}%") ; score += 4
     if rev_growth is not None and rev_growth > 10:
         supports.append(f"매출 성장 {rev_growth}%") ; score += 3
+    valuation = valuation_score_adjustment(latest, debt_ratio, op_margin, rev_growth)
+    score += float(valuation.get("score_adjustment") or 0)
+    warnings.extend(valuation.get("warnings") or [])
+    supports.extend(valuation.get("supports") or [])
     return {
         "symbol": symbol.upper(), "latest_period": f"{latest.get('bsns_year')}/{latest.get('reprt_code')}",
         "score_adjustment": score, "warnings": warnings, "supports": supports,
+        "valuation_score_adjustment": valuation.get("score_adjustment"),
+        "valuation_policy": valuation.get("policy"),
+        "valuation_metrics": valuation.get("metrics"),
         "debt_ratio_pct": debt_ratio, "operating_margin_pct": op_margin,
         "revenue_growth_pct": rev_growth, "operating_income_growth_pct": op_growth,
         "revenue": latest.get("revenue"), "operating_income": latest.get("operating_income"),

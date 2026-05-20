@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, subprocess, sys
+import argparse, json, os, subprocess, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +9,10 @@ sys.path.insert(0, str(ROOT))
 from app.database import init_db, list_universe_members
 from tools.agents.lib.agent_contract import attach_contract
 from tools.agents.recommendation_auditor import LOGICS, logic_config
+
+
+def utc_stamp() -> str:
+    return datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
 
 
 def load_recommendations(path: Path) -> dict:
@@ -205,6 +209,90 @@ def fund_role_logics(limit: int) -> tuple[list[str], dict]:
     return selected[:limit], meta
 
 
+def update_task_state(command: str, task_id: str, summary: str, detail: str = '', returncode: int | None = None) -> None:
+    cmd = state_update_cmd(command, task_id, summary, detail=detail, returncode=returncode)
+    if not cmd:
+        return
+    try:
+        subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def state_update_cmd(command: str, task_id: str, summary: str, detail: str = '', returncode: int | None = None) -> list[str] | None:
+    state_script = ROOT / 'scripts' / 'agent_task_state.py'
+    if not state_script.exists():
+        return None
+    cmd = [
+        sys.executable,
+        str(state_script),
+        command,
+        '--task-id',
+        task_id,
+        '--owner',
+        'current_recommendation_validation_worker',
+        '--kind',
+        'historical_simulation_validation',
+        '--scope',
+        'paper_only_no_broker_orders',
+        '--files',
+        'tools/agents/current_recommendation_validation_worker.py,tools/agents/simulation_validation_worker.py',
+        '--summary',
+        summary,
+    ]
+    if detail:
+        cmd.extend(['--detail', detail])
+    if returncode is not None:
+        cmd.extend(['--returncode', str(returncode)])
+    return cmd
+
+
+def launch_detached(cmd: list[str], stdout_path: Path, stderr_path: Path, task_id: str, worker_output: str) -> subprocess.Popen:
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_handle = stdout_path.open('a', encoding='utf-8')
+    stderr_handle = stderr_path.open('a', encoding='utf-8')
+    complete = state_update_cmd(
+        'complete',
+        task_id,
+        'Detached current recommendation simulation validation completed.',
+        detail=json.dumps({'worker_output': worker_output}, ensure_ascii=False),
+        returncode=0,
+    )
+    fail = state_update_cmd(
+        'fail',
+        task_id,
+        'Detached current recommendation simulation validation failed.',
+        detail=json.dumps({'worker_output': worker_output}, ensure_ascii=False),
+    )
+    wrapper = (
+        'import json, subprocess, sys\n'
+        'cmd=json.loads(sys.argv[1]); root=sys.argv[2]\n'
+        'complete=json.loads(sys.argv[3]); fail=json.loads(sys.argv[4])\n'
+        'proc=subprocess.run(cmd, cwd=root, text=True)\n'
+        'state_cmd=complete if proc.returncode == 0 else fail\n'
+        'if state_cmd:\n'
+        '    if proc.returncode != 0 and "--returncode" not in state_cmd:\n'
+        '        state_cmd += ["--returncode", str(proc.returncode)]\n'
+        '    subprocess.run(state_cmd, cwd=root, text=True)\n'
+        'sys.exit(proc.returncode)\n'
+    )
+    try:
+        return subprocess.Popen(
+            [sys.executable, '-c', wrapper, json.dumps(cmd), str(ROOT), json.dumps(complete or []), json.dumps(fail or [])],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+            start_new_session=True,
+            close_fds=True,
+        )
+    finally:
+        stdout_handle.close()
+        stderr_handle.close()
+
+
 def collect_targets(
     items: list[dict],
     symbol_limit: int,
@@ -330,6 +418,18 @@ def collect_targets(
                         break
     except Exception:
         pass
+    try:
+        next_issue = json.loads(Path('/tmp/next_trade_issue_context_latest.json').read_text(encoding='utf-8'))
+        priority = []
+        for action in ('next_batch_priority', 'watch_or_validation_priority'):
+            priority.extend((next_issue.get('summary') or {}).get(action) or [])
+        for sym in priority:
+            if sym and sym not in symbols:
+                symbols.append(sym)
+            if len(symbols) >= symbol_limit:
+                break
+    except Exception:
+        pass
     mover_symbols = []
     try:
         mover = json.loads(Path('/tmp/market_mover_seed_latest.json').read_text(encoding='utf-8'))
@@ -423,6 +523,7 @@ def main():
     ap.add_argument('--recommendations', default='/tmp/recommendations_latest.json')
     ap.add_argument('--output', default='/tmp/current_recommendation_validation_latest.json')
     ap.add_argument('--fund-consensus-boost', action='store_true', default=True, help='Prioritize top fund consensus symbols and fund role-derived logic families.')
+    ap.add_argument('--foreground', action='store_true', help='Run simulation_validation_worker synchronously for tests/manual runs.')
     args = ap.parse_args()
     init_db()
 
@@ -462,7 +563,8 @@ def main():
         print(json.dumps(packet, ensure_ascii=False, indent=2))
         return
 
-    worker_output = '/tmp/current_recommendation_simulation_validation_latest.json'
+    run_id = f"{utc_stamp()}_{os.getpid()}"
+    worker_output = f"/tmp/current_recommendation_simulation_validation_{run_id}.json"
     cmd = [
         sys.executable, 'tools/agents/simulation_validation_worker.py',
         '--symbols', ','.join(symbols),
@@ -473,6 +575,47 @@ def main():
         '--horizons', args.horizons,
         '--output', worker_output,
     ]
+    task_id = f"current-recommendation-validation-{run_id}"
+    if not args.foreground:
+        stdout_path = Path(f"/tmp/current_recommendation_simulation_validation_{run_id}.stdout.log")
+        stderr_path = Path(f"/tmp/current_recommendation_simulation_validation_{run_id}.stderr.log")
+        proc = launch_detached(cmd, stdout_path, stderr_path, task_id, worker_output)
+        update_task_state(
+            'start',
+            task_id,
+            'Detached current recommendation simulation validation started.',
+            detail=json.dumps({'pid': proc.pid, 'worker_output': worker_output, 'stdout': str(stdout_path), 'stderr': str(stderr_path)}, ensure_ascii=False),
+        )
+        packet.update({
+            'cmd': cmd,
+            'worker_mode': 'detached',
+            'worker_output': worker_output,
+            'worker_pid': proc.pid,
+            'worker_stdout': str(stdout_path),
+            'worker_stderr': str(stderr_path),
+            'task_id': task_id,
+            'worker': {
+                'status': 'running',
+                'processed_combinations': 0,
+                'saved': None,
+                'output': worker_output,
+                'pid': proc.pid,
+            },
+        })
+        attach_contract(
+            packet,
+            'current_recommendation_validation_worker',
+            status='ok',
+            inputs={'symbols': symbols, 'logics': logics, 'batch_size': args.batch_size},
+            outputs={'worker_mode': 'detached', 'worker_output': worker_output, 'pid': proc.pid, 'priority_meta': priority_meta},
+            metrics={'symbol_count': len(symbols), 'logic_count': len(logics), 'processed_combinations': 0, 'under_sampled_recommendation_count': len(priority_meta.get('under_sampled_recommendations') or [])},
+            warnings=[],
+            next_actions=['Check worker_output or task state for simulation completion.'],
+        )
+        Path(args.output).write_text(json.dumps(packet, ensure_ascii=False, indent=2), encoding='utf-8')
+        print(json.dumps(packet, ensure_ascii=False, indent=2))
+        return
+
     worker_timeout = max(240, min(1200, args.batch_size * 2))
     proc = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True, timeout=worker_timeout)
     worker = {}
@@ -482,6 +625,9 @@ def main():
         worker = {'_read_error': str(exc)}
     packet.update({
         'cmd': cmd,
+        'worker_mode': 'foreground',
+        'worker_output': worker_output,
+        'task_id': task_id,
         'worker_timeout_seconds': worker_timeout,
         'returncode': proc.returncode,
         'stdout_tail': proc.stdout[-3000:],

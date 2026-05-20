@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Paper Trader Recommendation Console</title>
   <meta name="root-path" content="/paper-trader">
-  <link rel="stylesheet" href="./static/style.css?v=20260515fundStatus1">
+  <link rel="stylesheet" href="./static/style.css?v=20260520readabilitySweep1">
 </head>
 <body>
 <div class="app-shell monitor-compact ux-redesign ui-cleanup ui-system">
@@ -13,7 +13,7 @@
     <div>
       <p class="eyebrow">Paper Research Console</p>
       <h1>리서치 대시보드</h1>
-      <p class="header-subtitle">종목추천을 먼저 보고, Fund·위원회·Risk Gate·전략 신뢰 라벨은 판단 근거로 분리해 확인합니다.</p>
+      <p class="header-subtitle">Fund consensus 추천과 가격 계획을 먼저 보고, 위원회·Risk Gate·보조 근거는 펼쳐서 확인합니다.</p>
     </div>
     <div class="topbar-actions title-actions">
       <button id="logout-btn" class="secondary logout-compact">Logout</button>
@@ -40,7 +40,7 @@
     </section>
 
     <section class="panel metrics tab-panel ux-primary-panel" data-tab-panel="funds">
-      <div class="section-header"><div><p class="eyebrow">Recommendation Engine</p><h2>추천 품질 엔진: Fund 성과</h2></div><span class="tag">paper only</span></div>
+      <div class="section-header"><div><p class="eyebrow">Fund Engine</p><h2>Fund 추천 엔진</h2></div><span class="tag">paper only</span></div>
       <p id="fund-performance-summary" class="summary-sentence">추천 품질을 높이는 fund 근거와 추천 종목 연결을 불러오는 중입니다.</p>
       <div id="fund-performance-metrics" class="metric-grid"></div>
       <div id="fund-performance-extra" class="fund-extra-grid"></div>
@@ -56,14 +56,14 @@
     </section>
 
     <section class="panel tab-panel ux-primary-panel" data-tab-panel="org">
-      <div class="section-header"><div><p class="eyebrow">Recommendation Organization</p><h2>추천 품질 조직</h2></div><span class="tag">fund-first</span></div>
+      <div class="section-header"><div><p class="eyebrow">Fund Organization</p><h2>Fund 조직</h2></div><span class="tag">fund-first</span></div>
       <p id="fund-org-summary" class="summary-sentence">종목추천을 개선하는 fund 조직 상태를 불러오는 중입니다.</p>
       <div id="fund-org-metrics" class="metric-grid"></div>
       <div id="fund-org-cards" class="audit-card-list"></div>
     </section>
 
     <section class="panel tab-panel ux-secondary-panel" data-tab-panel="org">
-      <div class="section-header"><div><p class="eyebrow">Org Loop</p><h2>개선루프 / 조직 구성도</h2></div></div>
+      <div class="section-header"><div><p class="eyebrow">Research Organization</p><h2>전체 연구 조직</h2></div></div>
       <div id="org-evaluation-metrics" class="metric-grid"></div>
       <p id="org-status-note" class="summary-sentence">에이전트 상태를 불러오는 중입니다.</p>
       <div id="org-topology" class="org-topology"></div>
@@ -101,7 +101,7 @@
     </section>
   </main>
 </div>
-<script src="./static/monitor.js?v=20260515fundStatus1"></script>
+<script src="./static/monitor.js?v=20260520readabilitySweep1"></script>
 <script>(function(){const ROOT=document.querySelector('meta[name="root-path"]')?.content||'';const b=document.getElementById('logout-btn');if(b)b.addEventListener('click',async()=>{await fetch(`${ROOT}/api/auth/logout`,{method:'POST'}).catch(()=>{});location.href=`${ROOT}/login`;});})();</script>
 </body>
 </html>

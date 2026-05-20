@@ -1150,6 +1150,24 @@ def summarize_target_adjusted(arr):
     return {**base,'quality':quality,'original_quality':original_quality,'delta_vs_original':delta,'accepted':accepted,'acceptance_status':status,'minimum_acceptance_samples':min_samples,'samples_needed_for_acceptance':max(0,min_samples-len(adj)),'verdict':status,'acceptance_reason':reason}
 
 
+def audited_market_reality(items):
+    out={}
+    audited=[x for x in items if x.get('status')=='audited']
+    for market in ['KR','US']:
+        market_items=[x for x in audited if (x.get('market') or market_of(x.get('symbol'))) == market]
+        block=metric_block(market_items)
+        excess_vals=sorted(float(x.get('excess_return_pct')) for x in market_items if x.get('excess_return_pct') is not None)
+        benchmark_vals=[float(x.get('benchmark_return_pct')) for x in market_items if x.get('benchmark_return_pct') is not None]
+        block.update({
+            'audited_count': len(market_items),
+            'candidate_buy_zone_count': sum(1 for x in market_items if x.get('action')=='candidate_buy_zone'),
+            'avg_benchmark_return_pct': round(sum(benchmark_vals)/len(benchmark_vals),2) if benchmark_vals else None,
+            'p10_excess_return_pct': round(excess_vals[max(0,int(len(excess_vals)*0.1)-1)],2) if excess_vals else None,
+            'interpretation': 'full_audit_all_watch_and_candidate_rows_not_selected_recommendation_subset',
+        })
+        out[market]=block
+    return out
+
 def summarize_by_market(logic_summaries, items):
     out={}
     audited=[x for x in items if x.get('status')=='audited' and x.get('action')=='candidate_buy_zone']
@@ -1243,7 +1261,7 @@ def summarize(items):
     overall_items=[x for x in items if x.get('status')=='audited' and x.get('action')=='candidate_buy_zone']
     conditional_context_overall=conditional_context_profile(overall_items)
     overall_role_profile=strategy_role_profile('overall', overall_items, context_profile=conditional_context_overall, committee_fill_summary=committee_overall)
-    summary={'best_logic':best[0], 'best':best[1], 'conditional_context_profile':conditional_context_overall, 'strategy_role_profile':overall_role_profile, 'best_by_market':{m:v.get('best_logic') for m,v in by_market.items()}, 'by_market':by_market, 'committee_fill_summary':committee_overall, 'target_adjusted_summary':target_adjusted_overall, 'by_logic':summaries}
+    summary={'best_logic':best[0], 'best':best[1], 'conditional_context_profile':conditional_context_overall, 'strategy_role_profile':overall_role_profile, 'market_reality':audited_market_reality(items), 'best_by_market':{m:v.get('best_logic') for m,v in by_market.items()}, 'by_market':by_market, 'committee_fill_summary':committee_overall, 'target_adjusted_summary':target_adjusted_overall, 'by_logic':summaries}
     summary['strategy_trust_improvement_plan']=strategy_trust_improvement_plan(summary)
     return summary
 

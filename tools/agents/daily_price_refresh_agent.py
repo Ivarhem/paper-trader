@@ -56,7 +56,17 @@ def active_symbols(limit: int) -> list[str]:
 
 
 def watch_symbols(conn: sqlite3.Connection, limit: int) -> list[str]:
-    rows = conn.execute("SELECT symbol FROM watchlist_items ORDER BY symbol LIMIT ?", (limit,)).fetchall()
+    rows = conn.execute(
+        """
+        SELECT w.symbol
+        FROM watchlist_items w
+        LEFT JOIN universe_members u ON u.symbol = w.symbol
+        WHERE COALESCE(u.status, 'watch') NOT IN ('retired', 'quarantine')
+        ORDER BY w.symbol
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
     return filter_supported([r["symbol"].upper() for r in rows])
 
 
@@ -243,11 +253,12 @@ def main() -> None:
             if item.get("empty") or item.get("error"):
                 failed_symbols.append(item.get("symbol"))
     failed_symbols = sorted({x for x in failed_symbols if x})
+    actionable_failed_symbols = [sym for sym in failed_symbols if not (after.get(sym) or {}).get("date")]
     warnings = []
     if stale_symbols:
         warnings.append(f"{len(stale_symbols)} symbols still have no daily price data")
-    if failed_symbols:
-        warnings.append(f"{len(failed_symbols)} symbols returned empty/error from yfinance")
+    if actionable_failed_symbols:
+        warnings.append(f"{len(actionable_failed_symbols)} symbols returned empty/error and still have no daily price data")
     if imports.get("returncode") != 0:
         warnings.append("price import command failed")
 
@@ -275,6 +286,7 @@ def main() -> None:
         "changed_symbols": changed[:200],
         "stale_symbols": stale_symbols,
         "failed_symbols": failed_symbols,
+        "actionable_failed_symbols": actionable_failed_symbols,
         "max_lag_by_market_days": max_lag_by_market(after),
         "before_latest": before,
         "after_latest": after,
@@ -286,8 +298,8 @@ def main() -> None:
         "daily_price_refresh_agent",
         status=status,
         inputs={"symbols": args.symbols or "active+watch+open+benchmarks+mover_seed", "lookback_days": args.lookback_days},
-        outputs={"symbol_count": len(symbols), "refreshed_count": len(changed), "failed_symbols": failed_symbols},
-        metrics={"symbol_count": len(symbols), "refreshed_count": len(changed), "stale_count": len(stale_symbols), "failed_count": len(failed_symbols)},
+        outputs={"symbol_count": len(symbols), "refreshed_count": len(changed), "failed_symbols": failed_symbols, "actionable_failed_symbols": actionable_failed_symbols},
+        metrics={"symbol_count": len(symbols), "refreshed_count": len(changed), "stale_count": len(stale_symbols), "failed_count": len(failed_symbols), "actionable_failed_count": len(actionable_failed_symbols)},
         warnings=warnings,
         next_actions=["Repair failed/stale symbols before trusting recommendations."] if warnings else [],
     )

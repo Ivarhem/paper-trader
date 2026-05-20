@@ -126,6 +126,50 @@ def seed_funds(n, capital):
         funds.append(base)
     return funds
 
+
+def load_issue_context() -> dict:
+    try:
+        data=json.loads(Path('/tmp/next_trade_issue_context_latest.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {'by_symbol': {}, 'summary': {}, 'by_action': {}}
+    return data if isinstance(data, dict) else {'by_symbol': {}, 'summary': {}, 'by_action': {}}
+
+
+def issue_context_for_symbol(symbol: str, issue_context: dict) -> dict:
+    row=(issue_context.get('by_symbol') or {}).get(str(symbol).upper()) or {}
+    if not isinstance(row, dict):
+        return {}
+    adj=max(-8.0, min(3.0, float(row.get('context_score_adjustment') or 0)))
+    action=row.get('action') or 'neutral_context'
+    evidence=row.get('top_evidence') or []
+    labels=[str(x.get('label') or x.get('theme_hint') or x.get('source') or '') for x in evidence[:3] if isinstance(x, dict)]
+    return {
+        'action': action,
+        'context_score_adjustment': adj,
+        'evidence_count': row.get('evidence_count'),
+        'top_labels': labels,
+        'reasons': (row.get('reasons') or [])[:4],
+        'source_run_at': issue_context.get('run_at'),
+        'authority': issue_context.get('authority'),
+    }
+
+
+def issue_strategy_role(style: str, base_role: str, issue: dict) -> str:
+    action=issue.get('action')
+    labels=' '.join(issue.get('top_labels') or [])
+    if action == 'block_or_avoid':
+        return 'issue_risk_avoidance'
+    if action == 'next_batch_priority':
+        if style in ('breakout','volume_surge') or any(k in labels for k in ('강세','모멘텀','AI','반도체','로보')):
+            return 'issue_momentum_breakout'
+        if style == 'mean_reversion':
+            return 'issue_confirmed_reversion'
+        return 'issue_confirmed_context'
+    if action == 'watch_or_validation_priority':
+        return 'issue_watch_validation'
+    return base_role
+
+
 def load_prices(conn, symbols, start_date):
     ph=','.join('?' for _ in symbols)
     rows=conn.execute(f"SELECT symbol,date,open,high,low,close,volume FROM price_bars WHERE timeframe='1d' AND symbol IN ({ph}) AND date>=? ORDER BY date,symbol", [*symbols,start_date]).fetchall()
@@ -223,7 +267,7 @@ def choose_strategy_role(style: str, r5: float, r20: float, r60: float, vol_rati
     return "generalist_rotation"
 
 
-def signal_for(symbol, idx, hist, fund):
+def signal_for(symbol, idx, hist, fund, issue_context=None):
     if idx < 60: return None
     row=hist[idx]; close=row['close']; prev=hist[:idx+1]
     closes=[x['close'] for x in prev]; vols=[x['volume'] for x in prev]
@@ -232,6 +276,7 @@ def signal_for(symbol, idx, hist, fund):
     vol20=avg(vols[-20:]) or 1; vol_ratio=vols[-1]/vol20 if vol20 else 1
     high20=max(x['high'] for x in prev[-20:]); low20=min(x['low'] for x in prev[-20:])
     style=fund['style']; score=50; reason=[]
+    issue=issue_context_for_symbol(symbol, issue_context or {})
     strategy_role=choose_strategy_role(style,r5,r20,r60,vol_ratio,close,ma20 or close,ma60 or close,high20,low20)
     if style=='trend':
         score += (12 if ma5>ma20>ma60 else -10) + min(18,max(-10,r20))*0.8 + min(8,max(-5,r60))*0.25; reason.append('ma/trend')
@@ -245,7 +290,18 @@ def signal_for(symbol, idx, hist, fund):
         score += (14 if r5<-4 and close>ma60 else -4) + (8 if close<ma20*0.97 else 0) - max(0,-r60-10)*0.4; reason.append('pullback reversion')
     elif style=='volume_surge':
         score += min(20,(vol_ratio-1)*8) + max(0,r5)*0.7 + (6 if close>ma20 else -4); reason.append('volume surge')
-    return {'symbol':symbol,'date':row['date'],'close':close,'score':round(score,2),'reason':reason,'strategy_role':strategy_role,'allowed_strategy_roles':fund.get('allowed_strategy_roles') or strategy_roles_for_style(style),'target':round(close*(1+fund['target_pct']/100),2),'stop':round(close*(1+fund['stop_pct']/100),2),'metrics':{'r5':round(r5,2),'r20':round(r20,2),'r60':round(r60,2),'vol_ratio':round(vol_ratio,2)}}
+    issue_adj=float(issue.get('context_score_adjustment') or 0)
+    if issue:
+        if issue.get('action') == 'block_or_avoid':
+            score -= 18; reason.append('issue:block_or_avoid')
+        elif style in ('breakout','volume_surge','trend'):
+            score += issue_adj; reason.append('issue_context')
+        elif style in ('balanced','mean_reversion'):
+            score += min(issue_adj, 1.5); reason.append('issue_context_limited')
+        elif style == 'defensive' and issue.get('action') in ('next_batch_priority','watch_or_validation_priority'):
+            score -= 1.0; reason.append('issue_chase_risk_defensive_penalty')
+        strategy_role=issue_strategy_role(style, strategy_role, issue)
+    return {'symbol':symbol,'date':row['date'],'close':close,'score':round(score,2),'reason':reason,'strategy_role':strategy_role,'allowed_strategy_roles':fund.get('allowed_strategy_roles') or strategy_roles_for_style(style),'target':round(close*(1+fund['target_pct']/100),2),'stop':round(close*(1+fund['stop_pct']/100),2),'issue_context':issue,'issue_context_parameter':{'enabled':bool(issue),'style_adjustment_applied':round(issue_adj,2),'role_after_issue':strategy_role},'metrics':{'r5':round(r5,2),'r20':round(r20,2),'r60':round(r60,2),'vol_ratio':round(vol_ratio,2)}}
 
 def value(fund, prices):
     pv=0.0
@@ -341,7 +397,7 @@ def sell_qty(fund, date, sym, pos, qty, px, reason, args):
     gross_pnl=money_floor((exit_krw-entry_krw)*qty); notional=money_floor(exit_krw*qty); costs=sell_costs(sym,notional,gross_pnl,args); costs={k:money_floor(v) for k,v in costs.items()}; net_pnl=money_floor(gross_pnl-costs['total'])
     fund['cash']=money_floor(fund['cash'] + notional-costs['total']); fund['realized_pnl'] += net_pnl; fund['trade_count']+=1; fund['total_costs']=fund.get('total_costs',0.0)+costs['total']
     pos['qty']=int(pos.get('qty',0))-qty
-    tr={'fund_id':fund['id'],'date':date,'symbol':sym,'side':'sell','price':round(px,2),'price_krw':round(exit_krw,2),'fx_rate':round(fx_rate_for_symbol(sym, fx),4),'qty':qty,'gross_pnl':round(gross_pnl,2),'pnl':round(net_pnl,2),'costs':{k:round(v,2) for k,v in costs.items()},'reason':reason,'strategy_role':pos.get('strategy_role'),'fund_style':fund.get('style'),'intraday_exit':'intraday' in reason}
+    tr={'fund_id':fund['id'],'date':date,'symbol':sym,'side':'sell','price':round(px,2),'price_krw':round(exit_krw,2),'fx_rate':round(fx_rate_for_symbol(sym, fx),4),'qty':qty,'gross_pnl':round(gross_pnl,2),'pnl':round(net_pnl,2),'costs':{k:round(v,2) for k,v in costs.items()},'reason':reason,'strategy_role':pos.get('strategy_role'),'fund_style':fund.get('style'),'issue_context':pos.get('issue_context'),'issue_context_parameter':pos.get('issue_context_parameter'),'intraday_exit':'intraday' in reason}
     if pos['qty']<=0 and sym in fund['positions']: del fund['positions'][sym]
     return tr
 
@@ -365,12 +421,12 @@ def buy_position(fund, date, sym, px, sig, budget, args, reason='buy'):
     fund['cash']=money_floor(fund['cash']-total_cash); fund['trade_count']+=1; fund['total_costs']=fund.get('total_costs',0.0)+fee
     if sym in fund['positions']:
         pos=fund['positions'][sym]; old_qty=int(pos.get('qty',0)); new_qty=old_qty+qty
-        pos['entry_price']=round(((pos['entry_price']*old_qty)+(px*qty))/new_qty,2); pos['entry_fx']=round(((float(pos.get('entry_fx') or fx_rate_for_symbol(sym, fx))*old_qty)+(fx_rate_for_symbol(sym, fx)*qty))/new_qty,4); pos['qty']=new_qty; pos['target']=sig['target']; pos['score']=sig['score']; pos['reason']=sig['reason']; pos['strategy_role']=sig.get('strategy_role'); pos['allowed_strategy_roles']=sig.get('allowed_strategy_roles'); pos['add_count']=int(pos.get('add_count',0))+1; pos['last_add_date']=date; pos['max_price']=max(float(pos.get('max_price',px)),px)
+        pos['entry_price']=round(((pos['entry_price']*old_qty)+(px*qty))/new_qty,2); pos['entry_fx']=round(((float(pos.get('entry_fx') or fx_rate_for_symbol(sym, fx))*old_qty)+(fx_rate_for_symbol(sym, fx)*qty))/new_qty,4); pos['qty']=new_qty; pos['target']=sig['target']; pos['score']=sig['score']; pos['reason']=sig['reason']; pos['strategy_role']=sig.get('strategy_role'); pos['allowed_strategy_roles']=sig.get('allowed_strategy_roles'); pos['issue_context']=sig.get('issue_context'); pos['issue_context_parameter']=sig.get('issue_context_parameter'); pos['add_count']=int(pos.get('add_count',0))+1; pos['last_add_date']=date; pos['max_price']=max(float(pos.get('max_price',px)),px)
         if reason == 'average_down': pos['average_down_count']=int(pos.get('average_down_count',0))+1
         if reason == 'pyramid_winner': pos['pyramid_count']=int(pos.get('pyramid_count',0))+1
     else:
-        fund['positions'][sym]={'symbol':sym,'entry_date':date,'entry_price':px,'entry_fx':fx_rate_for_symbol(sym, fx),'qty':qty,'target':sig['target'],'stop':sig['stop'],'score':sig['score'],'reason':sig['reason'],'strategy_role':sig.get('strategy_role'),'allowed_strategy_roles':sig.get('allowed_strategy_roles'),'entry_plan':sig.get('entry_plan'),'buy_fee':fee,'add_count':0,'average_down_count':0,'pyramid_count':0,'scale_out_count':0,'max_price':px}
-    return {'fund_id':fund['id'],'date':date,'symbol':sym,'side':'buy','price':round(px,2),'price_krw':round(px_krw,2),'fx_rate':round(fx_rate_for_symbol(sym, fx),4),'qty':qty,'budget':round(budget,2),'costs':{'commission':round(fee,2),'total':round(fee,2)},'score':sig['score'],'reason':reason+':' + ','.join(sig['reason']),'strategy_role':sig.get('strategy_role'),'fund_style':fund.get('style'),'entry_plan':sig.get('entry_plan')}
+        fund['positions'][sym]={'symbol':sym,'entry_date':date,'entry_price':px,'entry_fx':fx_rate_for_symbol(sym, fx),'qty':qty,'target':sig['target'],'stop':sig['stop'],'score':sig['score'],'reason':sig['reason'],'strategy_role':sig.get('strategy_role'),'allowed_strategy_roles':sig.get('allowed_strategy_roles'),'entry_plan':sig.get('entry_plan'),'issue_context':sig.get('issue_context'),'issue_context_parameter':sig.get('issue_context_parameter'),'buy_fee':fee,'add_count':0,'average_down_count':0,'pyramid_count':0,'scale_out_count':0,'max_price':px}
+    return {'fund_id':fund['id'],'date':date,'symbol':sym,'side':'buy','price':round(px,2),'price_krw':round(px_krw,2),'fx_rate':round(fx_rate_for_symbol(sym, fx),4),'qty':qty,'budget':round(budget,2),'costs':{'commission':round(fee,2),'total':round(fee,2)},'score':sig['score'],'reason':reason+':' + ','.join(sig['reason']),'strategy_role':sig.get('strategy_role'),'fund_style':fund.get('style'),'entry_plan':sig.get('entry_plan'),'issue_context':sig.get('issue_context'),'issue_context_parameter':sig.get('issue_context_parameter')}
 
 
 def position_market_value(pos, px, fx=None):
@@ -503,7 +559,7 @@ def main():
     start=(datetime.now(timezone.utc)-timedelta(days=args.days+90)).date().isoformat(); by_date,by_symbol=load_prices(conn,symbols,start); fx_series=load_usdkrw_series(conn,start); conn.close()
     dates=sorted([d for d in by_date if d >= (datetime.now(timezone.utc)-timedelta(days=args.days)).date().isoformat()])
     idx_by_symbol={s:{row['date']:i for i,row in enumerate(rows)} for s,rows in by_symbol.items()}
-    funds=seed_funds(args.fund_count,args.initial_capital); trades=[]; evol=[]; daily=[]
+    funds=seed_funds(args.fund_count,args.initial_capital); trades=[]; evol=[]; daily=[]; issue_context=load_issue_context()
     for day,date in enumerate(dates,1):
         prices={s:r for s,r in by_date[date].items()}; prices['_fx']=fx_for_date(fx_series,date)
         # Per-fund style-specific signals, normalized by market/asset bucket.
@@ -512,7 +568,7 @@ def main():
             for sym,hist in by_symbol.items():
                 idx=idx_by_symbol.get(sym,{}).get(date)
                 if idx is None: continue
-                sig=signal_for(sym,idx,hist,f)
+                sig=signal_for(sym,idx,hist,f,issue_context)
                 if sig: fsigs[sym]=sig
             fsigs=normalize_signals(fsigs)
             args._fx=prices.get('_fx') or {}
@@ -538,7 +594,7 @@ def main():
             fx=latest_prices.get('_fx') or {}; current_krw=price_to_krw(sym,current,fx); entry_krw=entry*float(pos.get('entry_fx') or fx_rate_for_symbol(sym,fx)); market_value=money_floor(qty*current_krw)
             pnl=money_floor((current_krw-entry_krw)*qty)
             pnl_pct=round((current_krw/entry_krw-1)*100,2) if entry_krw else None
-            holdings.append({'symbol':sym,'qty':qty,'entry_date':pos.get('entry_date'),'entry_price':round(entry,2),'current_price':round(current,2),'current_price_krw':round(current_krw,2),'entry_fx':pos.get('entry_fx'),'fx_rate':round(fx_rate_for_symbol(sym,fx),4),'target':round(target,2),'stop':round(stop,2),'market_value':market_value,'unrealized_pnl':pnl,'unrealized_pnl_pct':pnl_pct,'score':pos.get('score'),'reason':pos.get('reason'),'strategy_role':pos.get('strategy_role'),'allowed_strategy_roles':pos.get('allowed_strategy_roles'),'add_count':pos.get('add_count',0),'average_down_count':pos.get('average_down_count',0),'pyramid_count':pos.get('pyramid_count',0),'last_add_date':pos.get('last_add_date'),'scale_out_count':pos.get('scale_out_count',0),'entry_plan':pos.get('entry_plan')})
+            holdings.append({'symbol':sym,'qty':qty,'entry_date':pos.get('entry_date'),'entry_price':round(entry,2),'current_price':round(current,2),'current_price_krw':round(current_krw,2),'entry_fx':pos.get('entry_fx'),'fx_rate':round(fx_rate_for_symbol(sym,fx),4),'target':round(target,2),'stop':round(stop,2),'market_value':market_value,'unrealized_pnl':pnl,'unrealized_pnl_pct':pnl_pct,'score':pos.get('score'),'reason':pos.get('reason'),'strategy_role':pos.get('strategy_role'),'allowed_strategy_roles':pos.get('allowed_strategy_roles'),'add_count':pos.get('add_count',0),'average_down_count':pos.get('average_down_count',0),'pyramid_count':pos.get('pyramid_count',0),'last_add_date':pos.get('last_add_date'),'scale_out_count':pos.get('scale_out_count',0),'entry_plan':pos.get('entry_plan'),'issue_context':pos.get('issue_context'),'issue_context_parameter':pos.get('issue_context_parameter')})
         standings.append({'id':f['id'],'style':f['style'],'generation':f['generation'],'age_days':f['age_days'],'equity':h.get('equity'),'current_asset':h.get('equity'),'return_pct':h.get('return_pct'),'mdd_pct':h.get('mdd_pct'),'position_count':h.get('position_count'),'holdings':holdings,'trade_count':f['trade_count'],'total_costs':round(f.get('total_costs',0.0),2),'parent_id':f.get('parent_id'),'challenger_type':f.get('challenger_type'),'cash_buffer':f['cash_buffer'],'risk_per_trade':f['risk_per_trade'],'score_min':f['score_min'],'target_pct':f['target_pct'],'stop_pct':f['stop_pct'],'pyramid_enabled':f.get('pyramid_enabled',False),'average_down_enabled':f.get('average_down_enabled',False),'max_symbol_exposure_pct':f.get('max_symbol_exposure_pct'),'scale_out_enabled':f.get('scale_out_enabled',False),'trailing_stop_enabled':f.get('trailing_stop_enabled',False),'allowed_strategy_roles':f.get('allowed_strategy_roles') or strategy_roles_for_style(f.get('style'))})
     standings=sorted(standings,key=lambda x:x.get('return_pct') if x.get('return_pct') is not None else -999,reverse=True)
     trade_strategy_counts={}
@@ -562,6 +618,22 @@ def main():
     for tr in trades:
         sym=tr.get('symbol')
         if sym: trade_market_counts[market_of_symbol(sym)] = trade_market_counts.get(market_of_symbol(sym),0)+1
+    issue_action_counts={}
+    issue_strategy_counts={}
+    issue_trade_pnl={}
+    for tr in trades:
+        issue=(tr.get('issue_context') or {})
+        action=issue.get('action') or 'none'
+        if issue:
+            issue_action_counts[action]=issue_action_counts.get(action,0)+1
+            role=tr.get('strategy_role') or 'unknown'
+            issue_strategy_counts[role]=issue_strategy_counts.get(role,0)+1
+            if tr.get('side')=='sell':
+                bucket=issue_trade_pnl.setdefault(action, {'sell_count':0,'pnl_sum':0.0})
+                bucket['sell_count']+=1; bucket['pnl_sum']+=float(tr.get('pnl') or 0)
+    for bucket in issue_trade_pnl.values():
+        bucket['avg_pnl']=round(bucket['pnl_sum']/bucket['sell_count'],2) if bucket['sell_count'] else None
+        bucket['pnl_sum']=round(bucket['pnl_sum'],2)
     fund_market_exposure=[]
     for f in standings:
         exposure={}
@@ -569,7 +641,7 @@ def main():
             exposure[market_of_symbol(h.get('symbol'))]=exposure.get(market_of_symbol(h.get('symbol')),0)+float(h.get('market_value') or 0)
         fund_market_exposure.append({'fund_id':f.get('id'),'style':f.get('style'),'return_pct':f.get('return_pct'),'market_value_by_market':exposure})
     market_breakdown={'symbol_counts':market_counts,'asset_type_counts':asset_type_counts,'trade_counts':trade_market_counts,'top_fund_market_exposure':fund_market_exposure[:10]}
-    packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'paper_fund_price_direct_replay','real_trading':False,'authority':'paper_only_historical_price_replay_no_orders','requested_days':args.days,'trading_days':len(dates),'symbol_count':len(symbols),'universe_source':universe_source,'universe_symbols':symbols,'fund_count':len(active),'market_breakdown':market_breakdown,'strategy_role_counts':trade_strategy_counts,'fund_strategy_model':'fund_style_selects_strategy_role_per_signal','score_normalization':'market_asset_percentile_rank','retire_pct':args.retire_pct,'min_age_days':args.min_age_days,'evolve_every_days':args.evolve_every_days,'champion_challenger_policy':{'min_age_days':args.champion_min_age_days,'rank_cutoff':args.champion_rank_cutoff,'max_challengers_per_evolution':args.champion_challengers},'retirement_policy':'mark_to_market_daily_retire_every_5_trading_days_after_min_20_days_bottom_retire_pct_then_new_debut_plus_stale_champion_clone_mutate_challengers','currency_model':{'base_currency':'KRW','us_assets_marked_to_krw':True,'fx_symbol':'KRW=X','fx_source':(fx_series.get('latest') or {}).get('source'),'latest_usdkrw':(fx_series.get('latest') or {}).get('rate'),'latest_fx_date':(fx_series.get('latest') or {}).get('date')},'cost_model':{'kr_commission_bps':args.kr_commission_bps,'kr_sell_tax_bps':args.kr_sell_tax_bps,'us_commission_bps':args.us_commission_bps,'us_sell_fee_bps':args.us_sell_fee_bps,'us_gain_tax_pct':args.us_gain_tax_pct,'us_gain_tax_note':'paper proxy applied per profitable sell; real tax treatment may differ','exit_price_logic':'daily high/low target/stop; stop first if both touched; signal decay exits at close','quantity_logic':'integer shares only; cash/equity/notional/costs floored to 100 KRW unit','position_management':'cash/exposure-bounded repeated averaging-down and pyramiding inside each fund seed; new entries use entry-plan fill modeling; defensive funds wait for target_buy_price intraday low touch; exits require at least one overnight hold after entry_date; entry_date is not reset by adds; target scale-out max once; trailing stop for trend/breakout/volume funds','score_normalization':'raw style score converted to percentile within market/asset bucket before fund selection','entry_execution_model':{'policy':'paper_entry_plan_intraday_low_touch_no_orders','defensive':'wait for target_buy_price; buy only when daily low touches it','balanced_mean_reversion':'wait for target buy or close inside acceptable entry zone','momentum_styles':'allow close fill if pullback zone does not touch, but record entry plan'} },'summary':{'top_fund':standings[0] if standings else None,'bottom_fund':standings[-1] if standings else None,'avg_return_pct':round(sum((x.get('return_pct') or 0) for x in standings)/len(standings),2) if standings else None,'trade_count':len(trades),'evolution_events':len(evol),'retired_count':sum(len(x.get('retired') or []) for x in evol),'debut_count':sum(len(x.get('debuted') or []) for x in evol),'champion_challenger_count':sum(len(x.get('champion_challengers') or []) for x in evol)},'standings':standings,'daily':daily[-260:],'evolution_events':evol[-50:],'trades':trades[-500:],'warnings':warnings,'next_actions':['Promote top replay archetypes into strategy/router candidates after repeated runs.']}
+    packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'paper_fund_price_direct_replay','real_trading':False,'authority':'paper_only_historical_price_replay_no_orders','requested_days':args.days,'trading_days':len(dates),'symbol_count':len(symbols),'universe_source':universe_source,'universe_symbols':symbols,'fund_count':len(active),'market_breakdown':market_breakdown,'issue_context_model':{'source':'/tmp/next_trade_issue_context_latest.json','run_at':issue_context.get('run_at'),'by_action':issue_context.get('by_action'),'score_adjustment_policy':'style-aware, capped +3, block_or_avoid penalty','issue_action_trade_counts':issue_action_counts,'issue_strategy_role_counts':issue_strategy_counts,'issue_sell_pnl':issue_trade_pnl},'strategy_role_counts':trade_strategy_counts,'fund_strategy_model':'fund_style_selects_strategy_role_per_signal_plus_issue_context_parameter','score_normalization':'market_asset_percentile_rank','retire_pct':args.retire_pct,'min_age_days':args.min_age_days,'evolve_every_days':args.evolve_every_days,'champion_challenger_policy':{'min_age_days':args.champion_min_age_days,'rank_cutoff':args.champion_rank_cutoff,'max_challengers_per_evolution':args.champion_challengers},'retirement_policy':'mark_to_market_daily_retire_every_5_trading_days_after_min_20_days_bottom_retire_pct_then_new_debut_plus_stale_champion_clone_mutate_challengers','currency_model':{'base_currency':'KRW','us_assets_marked_to_krw':True,'fx_symbol':'KRW=X','fx_source':(fx_series.get('latest') or {}).get('source'),'latest_usdkrw':(fx_series.get('latest') or {}).get('rate'),'latest_fx_date':(fx_series.get('latest') or {}).get('date')},'cost_model':{'kr_commission_bps':args.kr_commission_bps,'kr_sell_tax_bps':args.kr_sell_tax_bps,'us_commission_bps':args.us_commission_bps,'us_sell_fee_bps':args.us_sell_fee_bps,'us_gain_tax_pct':args.us_gain_tax_pct,'us_gain_tax_note':'paper proxy applied per profitable sell; real tax treatment may differ','exit_price_logic':'daily high/low target/stop; stop first if both touched; signal decay exits at close','quantity_logic':'integer shares only; cash/equity/notional/costs floored to 100 KRW unit','position_management':'cash/exposure-bounded repeated averaging-down and pyramiding inside each fund seed; new entries use entry-plan fill modeling; defensive funds wait for target_buy_price intraday low touch; exits require at least one overnight hold after entry_date; entry_date is not reset by adds; target scale-out max once; trailing stop for trend/breakout/volume funds','score_normalization':'raw style score converted to percentile within market/asset bucket before fund selection','entry_execution_model':{'policy':'paper_entry_plan_intraday_low_touch_no_orders','defensive':'wait for target_buy_price; buy only when daily low touches it','balanced_mean_reversion':'wait for target buy or close inside acceptable entry zone','momentum_styles':'allow close fill if pullback zone does not touch, but record entry plan'} },'summary':{'top_fund':standings[0] if standings else None,'bottom_fund':standings[-1] if standings else None,'avg_return_pct':round(sum((x.get('return_pct') or 0) for x in standings)/len(standings),2) if standings else None,'trade_count':len(trades),'evolution_events':len(evol),'retired_count':sum(len(x.get('retired') or []) for x in evol),'debut_count':sum(len(x.get('debuted') or []) for x in evol),'champion_challenger_count':sum(len(x.get('champion_challengers') or []) for x in evol)},'standings':standings,'daily':daily[-260:],'evolution_events':evol[-50:],'trades':trades[-500:],'warnings':warnings,'next_actions':['Promote top replay archetypes into strategy/router candidates after repeated runs.']}
     attach_contract(packet,'paper_fund_price_replay_agent',status='degraded' if warnings else 'ok',outputs={'fund_count':len(active),'trading_days':len(dates)},metrics=packet['summary'],warnings=warnings,next_actions=packet['next_actions'])
     Path(args.output).write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8'); print(json.dumps(packet,ensure_ascii=False,indent=2))
 if __name__=='__main__': main()

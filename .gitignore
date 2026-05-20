@@ -17,6 +17,10 @@ auth_users.json.bak*
 
 # Generated research/runtime artifacts
 state/latest/
+state/agent_tasks.json
+state/agent_tasks.json.lock
+state/batch_pause_guard.json
+state/batch_pause_guard.json.lock
 static/*_latest.json
 static/recommendation_daily_outcomes.json
 static/validation_worker_status_latest.json

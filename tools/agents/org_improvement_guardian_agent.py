@@ -144,9 +144,13 @@ def classify_finding(f):
     if area == 'coverage_balance' and metric.get('monitor_under_tested_visible'):
         return {'area':area,'severity':sev,'recommendation':rec,'class':'observe','action':'under_tested_monitor_visible','finding_key':key,'recent_repeat_count':repeats,'reason':'저샘플 전략 목록이 monitor validation panel에 노출되어 검증 우선순위 추적 중'}
     if area == 'autonomous_research':
-        if repeats >= 6 and int(metric.get('suppressed_repeat_count') or 0) == 0 and int(metric.get('ledger_repeat_count') or 0) > int(metric.get('ledger_deduped_repeat_count') or 0):
-            return {'area':area,'severity':sev,'recommendation':rec,'class':'patch_proposal','action':'tighten_research_repeat_suppression','finding_key':key,'recent_repeat_count':repeats,'ledger_repeat_count':metric.get('ledger_repeat_count'),'ledger_deduped_repeat_count':metric.get('ledger_deduped_repeat_count'),'reason':'자율 연구가 정상 순환하더라도 반복 억제 카운터가 0이면 중복/유사 실험을 더 적극적으로 proposal 단계에서 걸러야 함'}
-        return {'area':area,'severity':sev,'recommendation':rec,'class':'observe','action':'monitor_autonomous_research_loop','finding_key':key,'recent_repeat_count':repeats,'reason':'자율 연구 루프 관찰 중'}
+        plan = load_json('/tmp/research_experiment_plan_latest.json')
+        planner_suppressed = int(((plan.get('summary') or {}).get('suppressed_repeat_count')) or 0)
+        hypothesis_suppressed = int(metric.get('suppressed_repeat_count') or 0)
+        effective_suppressed = max(hypothesis_suppressed, planner_suppressed)
+        if repeats >= 6 and effective_suppressed == 0 and int(metric.get('ledger_repeat_count') or 0) > int(metric.get('ledger_deduped_repeat_count') or 0):
+            return {'area':area,'severity':sev,'recommendation':rec,'class':'patch_proposal','action':'tighten_research_repeat_suppression','finding_key':key,'recent_repeat_count':repeats,'ledger_repeat_count':metric.get('ledger_repeat_count'),'ledger_deduped_repeat_count':metric.get('ledger_deduped_repeat_count'),'planner_suppressed_repeat_count':planner_suppressed,'reason':'자율 연구가 정상 순환하더라도 반복 억제 카운터가 0이면 중복/유사 실험을 더 적극적으로 proposal 단계에서 걸러야 함'}
+        return {'area':area,'severity':sev,'recommendation':rec,'class':'observe','action':'monitor_autonomous_research_loop','finding_key':key,'recent_repeat_count':repeats,'suppressed_repeat_count':effective_suppressed,'planner_suppressed_repeat_count':planner_suppressed,'reason':'자율 연구 루프가 반복 실험을 hypothesis/planner 단계에서 억제 중'}
     if area == 'lifecycle_stability':
         blockers = lifecycle_blocking_gates()
         if repeats >= 12 and int(metric.get('completed') or 0) > 0:

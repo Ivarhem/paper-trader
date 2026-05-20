@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-"""Profit-improvement orchestrator for paper_trader.
+"""Research agenda orchestrator for paper_trader.
 
 This is intentionally paper/historical only. It does not place orders. Its job is
-not to summarize the pipeline, but to choose the next bounded research actions
-that could improve recommendation returns, run safe diagnostics, and make the
-agenda visible to the UI/cron loop.
+not to own strategy generation or recommendation decisions. It reads director
+contracts, chooses cross-domain research priorities, and routes bounded agenda
+items back to the director that owns the work.
 """
 import argparse, json, subprocess, sys
 from datetime import datetime, timezone
@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
-from app.database import init_db, validation_coverage, list_strategy_registry, save_research_org_report
+from app.database import init_db, validation_coverage, save_research_org_report
 from tools.agents.lib.agent_contract import attach_contract
 
 
@@ -37,141 +37,110 @@ def run(name: str, cmd: list[str], timeout: int = 180) -> dict:
         err=f"{err}\n{name} timed out after {timeout}s".strip()
     return {'name':name,'cmd':cmd,'started_at':started,'ended_at':now(),'returncode':rc,'timed_out':timed_out,'stdout_tail':out[-2500:],'stderr_tail':err[-2500:],'error':rc!=0}
 
-def strategy_score(row: dict) -> float:
-    s=row.get('summary') or {}
-    return round(float(row.get('avg_excess_return_pct') or 0)*4 + float(row.get('recent_avg_excess_return_pct') or 0)*2 + float(row.get('success_rate_pct') or 0)/10 + min(8, int(row.get('samples') or 0)/200), 2)
+def director_status(packet: dict) -> str:
+    return str(packet.get('domain_status') or packet.get('status') or ((packet.get('contract') or {}).get('status')) or 'unknown')
 
 
-def blocker_tags(row: dict) -> list[str]:
-    tags=[]
-    reason=str(row.get('reason') or '')
-    recent=float(row.get('recent_avg_excess_return_pct') or 0)
-    success=float(row.get('success_rate_pct') or 0)
-    ex=float(row.get('avg_excess_return_pct') or 0)
-    samples=int(row.get('samples') or 0)
-    if 'recent rolling window deteriorated' in reason or recent < 0:
-        tags.append('recent_deterioration')
-    if success < 35:
-        tags.append('low_success_rate')
-    if ex < 1:
-        tags.append('weak_avg_excess')
-    if samples < 500:
-        tags.append('sample_gap')
-    if 'overselective' in reason:
-        tags.append('overselective_signal_rate')
-    if not tags:
-        tags.append('near_threshold_quality')
-    return tags
+def director_bottleneck(packet: dict) -> str | None:
+    return packet.get('bottleneck') or ((packet.get('summary') or {}).get('bottleneck'))
 
 
-def active_pool_gap(strategies: list[dict], target_active: int = 7) -> dict:
-    active=[x for x in strategies if x.get('status')=='active']
-    pool=[x for x in strategies if x.get('status') in ('watch','probation','candidate')]
-    ranked=sorted(pool,key=strategy_score,reverse=True)[:10]
-    blockers={}
-    items=[]
-    for r in ranked:
-        tags=blocker_tags(r)
-        for t in tags: blockers[t]=blockers.get(t,0)+1
-        items.append({'logic':r.get('logic'),'status':r.get('status'),'score':strategy_score(r),'samples':r.get('samples'),'success_rate_pct':r.get('success_rate_pct'),'avg_excess_return_pct':r.get('avg_excess_return_pct'),'recent_avg_excess_return_pct':r.get('recent_avg_excess_return_pct'),'blockers':tags,'reason':r.get('reason')})
-    return {'target_active':target_active,'active_count':len(active),'gap':max(0,target_active-len(active)),'promotion_proposal_count':0,'dominant_blockers':sorted(blockers.items(),key=lambda x:x[1],reverse=True),'top_blocked_candidates':items}
-
-
-def assigned_research_tasks(agenda: list[dict], gap: dict, recs: dict) -> list[dict]:
+def assigned_research_tasks(agenda: list[dict]) -> list[dict]:
     tasks=[]
-    for item in gap.get('top_blocked_candidates',[])[:4]:
-        blockers=set(item.get('blockers') or [])
-        if 'recent_deterioration' in blockers:
-            owner='exit_policy_optimizer'; action='retest exit/holding rules for recent deterioration'
-            unblock='recent_avg_excess_return_pct >= 0 and tail-risk flags reduced'
-        elif 'low_success_rate' in blockers:
-            owner='recommendation_audit'; action='audit comparable variants and inspect win-rate confidence'
-            unblock='wilson/quality score improves or strategy remains probation'
-        elif 'overselective_signal_rate' in blockers:
-            owner='strategy_success_optimizer'; action='broaden signal threshold without collapsing precision'
-            unblock='signal rate rises while avg excess stays positive'
-        else:
-            owner='simulation_validation_worker'; action='add validation samples around near-threshold candidate'
-            unblock='candidate qualifies for lifecycle active or is retired'
-        tasks.append({'priority':'high' if len(tasks)<2 else 'medium','owner_agent':owner,'theme':'active_pool','target':item.get('logic'),'action':action,'unblock_condition':unblock,'evidence':item})
-    rec_items=recs.get('items') or []
-    paper=[x for x in rec_items if x.get('recommendation_bucket')=='paper_buy_candidate'][:3]
-    for r in paper:
-        tasks.append({'priority':'high','owner_agent':'current_recommendation_validation','theme':'recommendation_conversion','target':r.get('symbol'),'action':'increase symbol-specific validation for paper_buy_candidate','unblock_condition':'critic under_validated issue clears or committee keeps research-only label','evidence':{'symbol':r.get('symbol'),'score':r.get('score'),'bucket':r.get('recommendation_bucket'),'critic_summary':(r.get('critic') or {}).get('summary')}})
+    for item in agenda:
+        owner=item.get('owner_director')
+        if not owner:
+            continue
+        tasks.append({
+            'priority': item.get('priority') or 'medium',
+            'owner_agent': owner,
+            'theme': item.get('theme'),
+            'target': item.get('target'),
+            'action': item.get('action'),
+            'unblock_condition': item.get('unblock_condition') or 'owner director reports bottleneck cleared or demoted to watch with evidence',
+            'evidence': item.get('evidence') or {'why': item.get('why')},
+        })
     return tasks[:8]
 
-def build_alpha_agenda(strategies, recs, evaluation, calibration, funnel, optimizer, tail_filter, target_active=7):
+def build_research_agenda(directors, recs, evaluation, calibration):
     items=[]
-    active=[x for x in strategies if x.get('status')=='active']
-    watch=[x for x in strategies if x.get('status') in ('watch','probation')]
+    strategy=directors.get('strategy_director') or {}
+    fund=directors.get('fund_director') or {}
+    recommendation=directors.get('recommendation_desk_lead') or {}
+    governance=directors.get('governance_director') or {}
+    data=directors.get('data_steward') or {}
     rec_items=recs.get('items') or []
     trade_eligible=sum(1 for x in rec_items if x.get('trade_eligible') or x.get('recommendation_bucket')=='approved')
-    if len(active) < target_active:
-        ranked=sorted(watch, key=strategy_score, reverse=True)[:5]
-        items.append({'priority':'high','theme':'active_pool','objective':'increase qualified active research strategies','why':f'active {len(active)} < target research pool {target_active}; trade eligible recommendations {trade_eligible}', 'action':'Run active_pool_gap diagnostics and assign blocker-specific validation/optimizer tasks.', 'candidates':[{'logic':r.get('logic'),'status':r.get('status'),'score':strategy_score(r),'avg_excess_return_pct':r.get('avg_excess_return_pct'),'recent_avg_excess_return_pct':r.get('recent_avg_excess_return_pct'),'samples':r.get('samples'),'blockers':blocker_tags(r)} for r in ranked]})
+    strategy_summary=strategy.get('summary') or {}
+    queue=strategy.get('promotion_queue') or []
+    if director_status(strategy) in ('watch','degraded','action_required') or strategy.get('bottleneck'):
+        items.append({
+            'priority': 'high' if director_status(strategy) in ('degraded','action_required') else 'medium',
+            'theme': 'strategy_research_backlog',
+            'owner_director': 'strategy_director',
+            'objective': 'keep strategy generation/validation/lifecycle inside Strategy Director ownership',
+            'why': director_bottleneck(strategy) or 'strategy director reports watch-level research bottleneck',
+            'action': 'Strategy Director should route promotion_queue work to its owned validation/lifecycle workers; orchestrator only tracks the agenda.',
+            'target': 'promotion_queue',
+            'unblock_condition': 'strategy_director reports high-confidence historical active count or documents why queue remains watch-only',
+            'evidence': {'status': director_status(strategy), 'summary': strategy_summary, 'promotion_queue': queue[:5]},
+        })
     if trade_eligible == 0 and rec_items:
-        items.append({'priority':'high','theme':'recommendation_conversion','objective':'turn research_watch candidates into qualified paper-buy candidates', 'why':'current recommendation list has no approved/trade_eligible candidates', 'action':'Prioritize current recommendation validation, calibration, and critic bottleneck reduction before generating more symbols.'})
+        items.append({'priority':'high','theme':'recommendation_conversion','owner_director':'recommendation_desk_lead','objective':'turn research_watch candidates into qualified paper-buy candidates', 'why':'current recommendation list has no approved/trade_eligible candidates', 'action':'Recommendation Desk Lead should route validation, calibration, critic, and committee bottlenecks; do not generate more symbols from the orchestrator.', 'target':'current_recommendations'})
     cal_findings=calibration.get('findings') or []
     bad_cal=[x for x in cal_findings if x.get('severity') in ('action','urgent','watch')]
     if bad_cal:
-        items.append({'priority':'medium','theme':'score_calibration','objective':'align score buckets with realized forward returns','why':bad_cal[0].get('finding'), 'action':bad_cal[0].get('recommendation')})
-    opt_summary=optimizer.get('summary') or {}
-    if opt_summary.get('research_only_active_count',0) and not opt_summary.get('trade_eligible_active_count'):
-        items.append({'priority':'medium','theme':'strategy_quality','objective':'move from research-only active to high-confidence historical active','why':f"research-only active {opt_summary.get('research_only_active_count')}, trade-eligible active {opt_summary.get('trade_eligible_active_count')}", 'action':'Use optimizer gates/tail-risk output to target exit policy and strategy family improvements.'})
-    severe=(tail_filter.get('summary') or {}).get('severe_count') or 0
-    if severe:
-        items.append({'priority':'high','theme':'tail_risk','objective':'raise risk-adjusted returns by reducing left-tail strategies','why':f'{severe} severe tail-risk strategies detected', 'action':'Keep severe strategies out of approved recommendations and run exit policy optimizer.'})
+        items.append({'priority':'medium','theme':'score_calibration','owner_director':'recommendation_desk_lead','objective':'align score buckets with realized forward returns','why':bad_cal[0].get('finding'), 'action':bad_cal[0].get('recommendation')})
+    for name, packet in [('data_steward', data), ('fund_director', fund), ('governance_director', governance)]:
+        status=director_status(packet)
+        if status in ('degraded','action_required'):
+            items.append({'priority':'high','theme':f'{name}_bottleneck','owner_director':name,'objective':'clear director-level blocker before strategy or recommendation expansion','why':director_bottleneck(packet) or f'{name} status is {status}', 'action':'Owner director should produce the repair queue; orchestrator tracks cross-domain priority only.', 'evidence':{'status':status,'summary':packet.get('summary')}})
     org_actions=evaluation.get('next_actions') or []
     for action in org_actions[:2]:
-        items.append({'priority':'medium','theme':'org_evaluator','objective':'resolve organization finding that blocks recommendation quality','why':'org evaluator next action', 'action':action})
+        items.append({'priority':'medium','theme':'org_evaluator','owner_director':'governance_director','objective':'resolve organization finding that blocks recommendation quality','why':'org evaluator next action', 'action':action})
     if not items:
-        items.append({'priority':'low','theme':'steady_state','objective':'continue compounding evidence','why':'no urgent bottleneck detected', 'action':'Keep validating current recommendations and monitor drift.'})
+        items.append({'priority':'low','theme':'steady_state','owner_director':'executive_director','objective':'continue compounding evidence','why':'no urgent bottleneck detected', 'action':'Keep directors validating their own queues and monitor drift.'})
     return items[:8]
 
 def main():
-    ap=argparse.ArgumentParser(description='Proactively choose paper-research actions to improve recommendation returns')
+    ap=argparse.ArgumentParser(description='Route paper-research improvement agenda across directors')
     ap.add_argument('--output', default='/tmp/research_org_orchestrator_latest.json')
-    ap.add_argument('--execute-safe-actions', action='store_true', default=True)
+    ap.add_argument('--execute-safe-actions', action='store_true', default=False)
     args=ap.parse_args(); init_db()
 
-    strategies=list_strategy_registry(); coverage=validation_coverage()
+    coverage=validation_coverage()
     recs=read_json('/tmp/recommendations_latest.json')
     evaluation=read_json('/tmp/research_org_evaluation_latest.json')
     calibration=read_json('/tmp/recommendation_calibration_latest.json')
-    funnel=read_json('/tmp/recommendation_funnel_latest.json')
-    optimizer=read_json('/tmp/strategy_success_optimizer_latest.json')
-    tail_filter=read_json('/tmp/strategy_tail_risk_filter_latest.json')
-    outcome=read_json('/tmp/recommendation_outcomes_latest.json')
     hypotheses=read_json('/tmp/research_hypotheses_latest.json')
     experiment_plan=read_json('/tmp/research_experiment_plan_latest.json')
     evidence_judge=read_json('/tmp/research_evidence_judge_latest.json')
     experiment_ledger=read_json('/tmp/research_experiment_ledger_latest.json')
+    directors={
+        'data_steward': read_json('/tmp/data_steward_latest.json'),
+        'strategy_director': read_json('/tmp/strategy_director_latest.json'),
+        'fund_director': read_json('/tmp/fund_director_latest.json'),
+        'recommendation_desk_lead': read_json('/tmp/recommendation_desk_lead_latest.json'),
+        'governance_director': read_json('/tmp/governance_director_latest.json'),
+    }
 
-    org_profile=read_json('configs/org_profile.json')
-    target_active=int(((org_profile.get('strategy') or {}).get('target_active') if isinstance(org_profile, dict) else None) or 7)
-    gap=active_pool_gap(strategies,target_active)
-    agenda=build_alpha_agenda(strategies,recs,evaluation,calibration,funnel,optimizer,tail_filter,target_active)
-    assigned_tasks=assigned_research_tasks(agenda,gap,recs)
-    # The autonomous research loop now owns bounded experiment execution. The
-    # orchestrator should direct and summarize, not duplicate worker calls. Keep
-    # only a lightweight balancer probe for active-pool visibility if no isolated
-    # experiment runner output exists yet.
+    agenda=build_research_agenda(directors,recs,evaluation,calibration)
+    assigned_tasks=assigned_research_tasks(agenda)
+    # Execution belongs to directors and the autonomous experiment loop. This
+    # agent is a routing surface, so it should not invoke strategy workers.
     actions=[]
-    themes={x.get('theme') for x in agenda if x.get('priority') in ('high','medium')}
-    runner_results=read_json('/tmp/research_experiment_results_latest.json')
-    if args.execute_safe_actions and not (runner_results.get('results') or []) and 'active_pool' in themes:
-        actions.append(run('active_strategy_balancer_probe',[sys.executable,'tools/agents/active_strategy_balancer_agent.py','--target-active',str(target_active),'--max-promote',str(((org_profile.get('strategy') or {}).get('max_promote') if isinstance(org_profile, dict) else None) or 4),'--high-upside-slots',str(((org_profile.get('strategy') or {}).get('high_upside_slots') if isinstance(org_profile, dict) else None) or 4),'--output','/tmp/active_strategy_balancer_probe_latest.json'],timeout=120))
 
-    active=[x for x in list_strategy_registry() if x.get('status')=='active']
     recs_after=read_json('/tmp/recommendations_latest.json')
     trade_eligible=sum(1 for x in (recs_after.get('items') or []) if x.get('trade_eligible') or x.get('recommendation_bucket')=='approved')
+    strategy_summary=(directors.get('strategy_director') or {}).get('summary') or {}
     payload={
         'run_at':now(),
-        'mode':'profit_improvement_orchestrator',
+        'mode':'research_agenda_orchestrator',
         'real_trading':False,
-        'mission':'Actively improve paper/historical recommendation returns by selecting bounded research actions, not merely summarizing pipeline status.',
-        'objective_metrics':{'active_count':len(active),'target_active':target_active,'active_gap':gap.get('gap'),'trade_eligible_recommendations':trade_eligible,'coverage_pct':coverage.get('coverage_pct_estimate'),'completed_results':coverage.get('completed_results')},
-        'active_pool_gap':gap,
+        'mission':'Route paper/historical improvement work across director-owned queues; do not own strategy generation, validation, lifecycle, or recommendation decisions.',
+        'objective_metrics':{'strategy_active_count':strategy_summary.get('active_count'),'strategy_promotion_queue_count':strategy_summary.get('promotion_queue_count'),'trade_eligible_recommendations':trade_eligible,'coverage_pct':coverage.get('coverage_pct_estimate'),'completed_results':coverage.get('completed_results')},
+        'director_statuses':{name: director_status(packet) for name, packet in directors.items()},
+        'research_agenda':agenda,
         'alpha_agenda':agenda,
         'assigned_research_tasks':assigned_tasks,
         'autonomous_research': {
@@ -187,15 +156,15 @@ def main():
             'judgments': evidence_judge.get('judgments') or [],
         },
         'safe_actions_executed':actions,
-        'execution_model':'autonomous_experiment_runner_primary',
+        'execution_model':'director_routed_agenda_only',
         'notify': bool([x for x in agenda if x.get('priority')=='high'] or [a for a in actions if a.get('error')]),
     }
     status='degraded' if any(a.get('error') for a in actions) else 'ok'
     warnings=[f"{a['name']} failed" for a in actions if a.get('error')]
-    next_actions=[x.get('action') for x in agenda if x.get('priority') in ('high','medium')][:5]
-    summary=f"Alpha Orchestrator: {len(agenda)} agenda items, {len(actions)} safe actions, active {len(active)}, trade-eligible recs {trade_eligible}."
+    next_actions=[f"{x.get('owner_director')}: {x.get('action')}" for x in agenda if x.get('priority') in ('high','medium')][:5]
+    summary=f"Research Agenda Orchestrator: {len(agenda)} agenda items, {len(actions)} direct actions, trade-eligible recs {trade_eligible}."
     payload['summary']=summary
-    attach_contract(payload,'research_org_orchestrator',status=status,outputs={'agenda_count':len(agenda),'assigned_task_count':len(assigned_tasks),'autonomous_hypothesis_count':len(hypotheses.get('hypotheses') or []),'autonomous_plan_count':len(experiment_plan.get('plans') or []),'safe_action_count':len(actions),'active_count':len(active),'trade_eligible_recommendations':trade_eligible},metrics=payload['objective_metrics']|{'agenda_count':len(agenda),'assigned_task_count':len(assigned_tasks),'autonomous_hypothesis_count':len(hypotheses.get('hypotheses') or []),'autonomous_plan_count':len(experiment_plan.get('plans') or []),'safe_action_count':len(actions)},warnings=warnings,next_actions=next_actions)
+    attach_contract(payload,'research_org_orchestrator',status=status,outputs={'agenda_count':len(agenda),'assigned_task_count':len(assigned_tasks),'autonomous_hypothesis_count':len(hypotheses.get('hypotheses') or []),'autonomous_plan_count':len(experiment_plan.get('plans') or []),'safe_action_count':len(actions),'trade_eligible_recommendations':trade_eligible},metrics=payload['objective_metrics']|{'agenda_count':len(agenda),'assigned_task_count':len(assigned_tasks),'autonomous_hypothesis_count':len(hypotheses.get('hypotheses') or []),'autonomous_plan_count':len(experiment_plan.get('plans') or []),'safe_action_count':len(actions)},warnings=warnings,next_actions=next_actions)
     rid=save_research_org_report('orchestrator_run',summary,payload); payload['report_id']=rid
     Path(args.output).write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(payload,ensure_ascii=False,indent=2))

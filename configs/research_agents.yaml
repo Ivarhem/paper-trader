@@ -50,6 +50,7 @@ agent_groups:
     - strategy_context_router
     - strategy_context_outcome_ledger
     - target_return_adjustment_evaluator
+    - strategy_director
   market_context:
     mission: Add cross-market, issue, and news context without creating direct trade
       signals.
@@ -57,6 +58,7 @@ agent_groups:
     - market_context
     - market_mover_seed
     - investor_flow_seed
+    - external_mover_validation
     - market_shock_mover_scout
     - supply_close_strength_scout
     - theme_spillover_backtest
@@ -66,6 +68,7 @@ agent_groups:
     - kr_multi_evidence_signal_scout
     - market_news_issue_scout
     - market_issue_narrative
+    - next_trade_issue_context
     - market_regime_gate
     - recommendation_market_context
   recommendation_committee:
@@ -87,7 +90,9 @@ agent_groups:
     - recommendation_funnel
     - recommendation_calibration
     - supply_weight_evaluator
+    - investor_flow_outcome_evaluator
     - fund_recommendation_consensus
+    - recommendation_desk_lead
   meta_governance:
     mission: Audit the research organization, detect stale/ineffective gates, and
       suggest safe improvements.
@@ -116,11 +121,13 @@ agent_groups:
     - fund_performance_evaluator
     - fund_risk_guardian
     - fund_consensus
+    - fund_director
   compact_interfaces:
     mission: Provide token-efficient department contracts and research queues for
       UI, agents, and LLM review flows.
     agents:
     - suborg_summary
+    - executive_director
 key_agent_contracts:
   recommendation_agent:
     script: tools/agents/recommendation_agent.py
@@ -176,7 +183,8 @@ key_agent_contracts:
   alpha_fast_lane:
     script: tools/agents/alpha_fast_lane_agent.py
     output: /tmp/alpha_fast_lane_latest.json
-    role: Select current recommendation/fund/mover symbol-logic pairs with early positive validation evidence for fast-lane historical validation.
+    role: Select current recommendation/fund/mover symbol-logic pairs with early positive
+      validation evidence for fast-lane historical validation.
   recommendation_critic:
     script: tools/agents/recommendation_critic_agent.py
     output: /tmp/recommendations_latest.json
@@ -213,9 +221,43 @@ key_agent_contracts:
     output: /tmp/research_experiment_specs_latest.json
     role: Compile research queue, audit, scout, and escalation outputs into normalized
       paper-only experiment specs for the generic planner/runner workflow.
+  data_steward:
+    script: tools/agents/data_steward_agent.py
+    output: /tmp/data_steward_latest.json
+    role: Domain supervisor for universe, price, disclosure, seed data freshness, and data repair queues.
+  market_context_director:
+    script: tools/agents/market_context_director_agent.py
+    output: /tmp/market_context_director_latest.json
+    role: Domain supervisor for market issue, regime, route, and recommendation-context routing.
+  strategy_director:
+    script: tools/agents/strategy_director_agent.py
+    output: /tmp/strategy_director_latest.json
+    role: Domain supervisor for strategy generation, validation, lifecycle, audit,
+      and duplicate strategy work.
+  fund_director:
+    script: tools/agents/fund_director_agent.py
+    output: /tmp/fund_director_latest.json
+    role: Domain supervisor for paper fund league, registry, performance, risk, and
+      consensus quality.
+  recommendation_desk_lead:
+    script: tools/agents/recommendation_desk_lead_agent.py
+    output: /tmp/recommendation_desk_lead_latest.json
+    role: Domain supervisor for recommendation generation, critique, committee posture,
+      validation, and outcome feedback.
+  governance_director:
+    script: tools/agents/governance_director_agent.py
+    output: /tmp/governance_director_latest.json
+    role: Domain supervisor for integrity checks, org review, experiment workflow, and patch proposal ownership.
+  executive_director:
+    script: tools/agents/executive_director_agent.py
+    output: /tmp/executive_director_latest.json
+    role: Executive supervisor for domain directors, sub-organization health, escalation,
+      and next-cycle org priorities.
 authority_contracts:
   market_mover_seed: data_seed_only
   investor_flow_seed: data_seed_only
+  external_mover_validation: paper_only_validation_seed_not_order_signal
+  investor_flow_outcome_evaluator: proposal_only_weight_tuning_gate
   market_shock_mover_scout: hypothesis_source_only
   theme_spillover_backtest: diagnostic_only
   strategy_registry_status:
@@ -246,8 +288,9 @@ authority_contracts:
     evaluator: org_evaluator
     guardian: org_improvement_guardian
     integrity: paper_trader_integrity
-    rule: Orchestrator chooses bounded research actions; evaluator audits structure
-      and outcomes; guardian classifies fixes; integrity checks runtime/config health.
+    rule: Orchestrator routes bounded research agenda to director-owned queues;
+      evaluator audits structure and outcomes; guardian classifies fixes; integrity
+      checks runtime/config health.
   token_optimized_read_order:
     primary:
     - /tmp/research_pipeline_status.json
@@ -255,8 +298,8 @@ authority_contracts:
     - /tmp/research_queue_latest.json
     - /tmp/recommendations_status_latest.json
     - /tmp/audit_status_latest.json
-    rule: Open full artifacts such as recommendation_audit_full_latest.json only
-      for targeted debugging, never as default context.
+    rule: Open full artifacts such as recommendation_audit_full_latest.json only for
+      targeted debugging, never as default context.
 toolbox_agents:
   manual_research:
   - stock_research_run.py
@@ -274,6 +317,7 @@ toolbox_agents:
   - external_context_agent.py
   - candidate_funnel_agent.py
   - strategy_family_manager_agent.py
+  - external_mover_validation_agent.py
   legacy_wrappers:
   - research_org_run.py
   - agent_evaluator.py
@@ -331,6 +375,12 @@ toolbox_agents:
     authority: proposal_only_weight_tuning_gate
     mission: Evaluate supply/investor-flow score overlays against completed paper
       outcomes and propose bounded weight changes.
+  investor_flow_outcome_evaluator:
+    script: tools/agents/investor_flow_outcome_evaluator_agent.py
+    output: /tmp/investor_flow_outcome_evaluator_latest.json
+    authority: proposal_only_investor_flow_weight_learning_no_orders
+    mission: Evaluate dated foreign/institution seed cohorts against future benchmark-relative
+      returns before changing investor-flow weights.
   target_return_adjustment_evaluator:
     script: tools/agents/target_return_adjustment_evaluator_agent.py
     output: /tmp/target_return_adjustment_evaluator_latest.json
@@ -343,3 +393,124 @@ toolbox_agents:
   common_universe:
     script: tools/agents/common_universe_agent.py
     output: /tmp/common_universe_latest.json
+domain_supervisors:
+  phase: phase_2_data_market_strategy_fund_recommendation_governance_plus_executive
+  schema: paper_trader.domain_supervisors.v1
+  authority_boundary: supervisors evaluate, assign next-cycle work, and flag duplicate/missing
+    capabilities; they do not place orders or directly approve recommendations
+  supervisors:
+    data_steward:
+      domain: data_office
+      output: /tmp/data_steward_latest.json
+      manages:
+      - pipeline_smoke_check
+      - universe_discovery
+      - common_universe
+      - daily_price_refresh
+      - data_quality
+      - opendart_disclosures
+      - sec_edgar_disclosures
+      - market_mover_seed
+      - investor_flow_seed
+      - external_mover_validation
+    market_context_director:
+      domain: market_context_desk
+      output: /tmp/market_context_director_latest.json
+      manages:
+      - market_context
+      - market_shock_mover_scout
+      - supply_close_strength_scout
+      - theme_spillover_backtest
+      - market_issue_scout
+      - market_news_issue_scout
+      - market_issue_narrative
+      - next_trade_issue_context
+      - recommendation_market_context
+      - market_regime_gate
+      - market_route_audit
+      - us_route_eligibility
+    strategy_director:
+      domain: strategy_research
+      output: /tmp/strategy_director_latest.json
+      manages:
+      - strategy_generator
+      - capacity_planner
+      - simulation_validation_worker
+      - discovery_validation
+      - strategy_novelty_pruner
+      - strategy_lifecycle
+      - active_strategy_balancer
+      - strategy_tail_risk_filter
+      - strategy_success_optimizer
+      - recommendation_audit
+      - outcome_attribution
+      - audit_tail_quarantine_scout
+      - positive_cohort_scout
+      - exit_policy_optimizer
+      - short_horizon_profit_profile
+      - strategy_context_router
+      - strategy_context_outcome_ledger
+      - target_return_adjustment_evaluator
+    fund_director:
+      domain: fund_research
+      output: /tmp/fund_director_latest.json
+      manages:
+      - paper_fund_simulator
+      - paper_fund_historical_replay
+      - paper_fund_price_replay
+      - fund_registry
+      - fund_performance_evaluator
+      - fund_risk_guardian
+      - fund_consensus
+      - fund_recommendation_consensus
+    recommendation_desk_lead:
+      domain: recommendation_committee
+      output: /tmp/recommendation_desk_lead_latest.json
+      manages:
+      - recommendation_agent
+      - recommendation_agent_after_disclosure
+      - recommendation_critic
+      - portfolio_risk_manager
+      - market_regime_gate
+      - investment_committee
+      - oversold_recovery
+      - shadow_recommendations
+      - internal_signal_board
+      - alpha_fast_lane
+      - current_recommendation_validation
+      - committee_performance_ledger
+      - recommendation_outcome_tracker
+      - recommendation_funnel
+      - recommendation_calibration
+      - supply_weight_evaluator
+      - investor_flow_outcome_evaluator
+      - fund_recommendation_consensus
+    governance_director:
+      domain: governance_office
+      output: /tmp/governance_director_latest.json
+      manages:
+      - paper_trader_integrity
+      - org_evaluator
+      - org_improvement_guardian
+      - org_architecture_review
+      - research_hypothesis
+      - experiment_spec_compiler
+      - experiment_planner
+      - experiment_runner
+      - evidence_judge
+      - research_experiment_ledger
+      - research_org_orchestrator
+      - experiment_escalation
+    executive_director:
+      domain: executive_governance
+      output: /tmp/executive_director_latest.json
+      manages:
+      - data_steward
+      - market_context_director
+      - strategy_director
+      - fund_director
+      - recommendation_desk_lead
+      - governance_director
+      - suborg_summary
+  future_phase:
+  - execution_operations_director

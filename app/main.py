@@ -1172,19 +1172,10 @@ def artifact_key_from_path(path: str) -> str:
 
 
 def db_artifact_is_fresh(target: Path, payload: dict) -> bool:
-    if not target.exists():
-        return True
-    updated_at = payload.get("_db_updated_at") if isinstance(payload, dict) else None
-    if not updated_at:
-        return False
-    try:
-        normalized = str(updated_at).replace("Z", "+00:00")
-        db_ts = datetime.fromisoformat(normalized)
-        if db_ts.tzinfo is None:
-            db_ts = db_ts.replace(tzinfo=timezone.utc)
-        return db_ts.timestamp() >= target.stat().st_mtime - 1
-    except Exception:
-        return False
+    # latest_artifacts is now the authoritative latest-state store. /tmp and
+    # static JSON files are compatibility mirrors, so file mtimes should not
+    # shadow a DB payload that was written by the pipeline artifact index.
+    return True
 
 
 def read_tmp_json(path: str, fallback: dict, *, prefer_db: bool = True) -> dict:
@@ -1552,7 +1543,7 @@ def get_latest_recommendation_market_context() -> dict:
 def get_latest_fund_org_summary() -> dict:
     # Single fund sub-organization contract for UI/API consumers. Prefer the
     # pipeline-generated /tmp artifact; fall back to static for no-restart deployments.
-    for path in (Path("/tmp/fund_org_summary_latest.json"), Path("static/fund_org_summary_latest.json")):
+    for path in (Path("/tmp/fund_suborg_summary_latest.json"), Path("/tmp/fund_org_summary_latest.json"), Path("static/fund_suborg_summary_latest.json"), Path("static/fund_org_summary_latest.json")):
         if path.exists():
             try:
                 return json.loads(path.read_text(encoding="utf-8"))
@@ -1586,13 +1577,19 @@ def get_latest_research_pipeline(
     if not isinstance(detail, str):
         detail = "compact"
     if detail == "compact":
-        return read_compact_or_full(
+        payload = read_compact_or_full(
             "/tmp/context_goal_latest.json",
             "/tmp/research_pipeline_latest.json",
             latest_research_org_report("research_pipeline") or {"status": "not_run"},
             "research pipeline",
             detail=detail,
         )
+        supervisors = read_tmp_json("/tmp/executive_director_latest.json", {})
+        domain_summary = read_tmp_json("/tmp/research_org_suborg_summary_latest.json", {})
+        payload["domain_supervisors"] = (domain_summary.get("domain_supervisors") or {}) if isinstance(domain_summary, dict) else {}
+        if supervisors:
+            payload["domain_supervisors"]["executive_director"] = supervisors
+        return payload
     return read_tmp_json("/tmp/research_pipeline_latest.json", latest_research_org_report("research_pipeline") or {"status": "not_run"})
 
 
@@ -1604,6 +1601,16 @@ def get_latest_local_llm_delegation() -> dict:
         {"status": "not_run"},
         "local LLM delegation",
     )
+
+
+@app.get("/api/research/domain-supervisors/latest")
+def get_latest_domain_supervisors() -> dict:
+    summary = read_tmp_json("/tmp/research_org_suborg_summary_latest.json", {})
+    supervisors = (summary.get("domain_supervisors") or {}) if isinstance(summary, dict) else {}
+    executive = read_tmp_json("/tmp/executive_director_latest.json", {})
+    if executive:
+        supervisors["executive_director"] = executive
+    return {"status": "ok" if supervisors else "not_run", "domain_supervisors": supervisors}
 
 
 @app.get("/api/research/org/evaluation/latest")
@@ -1716,6 +1723,10 @@ def get_latest_research_org() -> dict:
     if path.exists():
         try:
             pipe = json.loads(path.read_text(encoding="utf-8"))
+            domain_supervisors = pipe.get("domain_supervisors") or {}
+            executive = read_tmp_json("/tmp/executive_director_latest.json", {})
+            if executive:
+                domain_supervisors["executive_director"] = executive
             return {
                 "status": pipe.get("status") or "not_run",
                 "source": "research_pipeline_latest",
@@ -1725,6 +1736,8 @@ def get_latest_research_org() -> dict:
                 "after": pipe.get("after") or {},
                 "fund_org_summary": pipe.get("fund_org_summary") or {},
                 "recommendations_summary": pipe.get("recommendations_summary") or {},
+                "domain_supervisors": domain_supervisors,
+                "suborg_summary": read_tmp_json("/tmp/research_org_suborg_summary_latest.json", {}),
                 "next_actions": pipe.get("next_actions") or [],
             }
         except json.JSONDecodeError as exc:

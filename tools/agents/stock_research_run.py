@@ -23,6 +23,8 @@ DEFAULT_OUTPUT = Path('/tmp/stock_research_latest.json')
 DEFAULT_OUTPUT_POINTER = Path('/tmp/stock_research_latest_path')
 DEFAULT_NEAR_MISS_QUARANTINE_OUTPUT = Path('/tmp/stock_research_near_miss_quarantine_latest.json')
 DEFAULT_NEAR_MISS_QUARANTINE_OUTPUT_POINTER = Path('/tmp/stock_research_near_miss_quarantine_latest_path')
+DEFAULT_PEER_BASKET_OUTPUT = Path('/tmp/stock_research_peer_basket_latest.json')
+DEFAULT_PEER_BASKET_OUTPUT_POINTER = Path('/tmp/stock_research_peer_basket_latest_path')
 
 
 
@@ -260,6 +262,122 @@ def build_near_miss_quarantine(withheld_promotions: list[dict], *, cutoffs: list
         'items': items,
     }
 
+
+def _percentile(values: list[float], q: float) -> float | None:
+    if not values:
+        return None
+    xs = sorted(values)
+    pos = (len(xs) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(xs) - 1)
+    if lo == hi:
+        return xs[lo]
+    return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
+
+
+def build_peer_basket_validation(wf: dict, *, cutoffs: list[str], min_peer_symbols: int = 2, min_cutoff_passes: int = 3, min_trade_floor_margin: int = 2) -> dict:
+    """Summarize whether a promising setup is broad enough for promotion review.
+
+    This artifact is historical-only. It turns narrow single-symbol wins into
+    peer-basket validation tasks, and emphasizes tail/trade-count margins before
+    anything can graduate from research priority to promotion evidence.
+    """
+    rows = wf.get('results') or []
+    clusters: dict[tuple, list[dict]] = {}
+    for item in rows:
+        selected = item.get('selected_train') or {}
+        strategy = selected.get('strategy')
+        if not strategy:
+            continue
+        params = tuple(sorted((selected.get('params') or {}).items()))
+        clusters.setdefault((strategy, params), []).append(item)
+
+    items = []
+    for (strategy, params_tuple), arr in clusters.items():
+        by_symbol: dict[str, list[dict]] = {}
+        passed_rows = []
+        excess_values = []
+        drawdowns = []
+        trades = []
+        for item in arr:
+            sym = str(item.get('symbol') or '')
+            by_symbol.setdefault(sym, []).append(item)
+            test = item.get('out_of_sample_test') or {}
+            tr = test.get('total_return_pct')
+            bh = test.get('buy_hold_return_pct')
+            if tr is not None and bh is not None:
+                excess_values.append(float(tr) - float(bh))
+            if test.get('max_drawdown_pct') is not None:
+                drawdowns.append(float(test.get('max_drawdown_pct')))
+            if test.get('trade_count') is not None:
+                trades.append(int(test.get('trade_count')))
+            if item.get('decision') == 'promote':
+                passed_rows.append(item)
+
+        passed_symbols = sorted({str(x.get('symbol') or '') for x in passed_rows if x.get('symbol')})
+        passed_cutoffs = sorted({str(x.get('cutoff') or x.get('train_end') or '') for x in passed_rows if (x.get('cutoff') or x.get('train_end'))})
+        min_trades = min(trades) if trades else None
+        p10_excess = _percentile(excess_values, 0.10)
+        p25_excess = _percentile(excess_values, 0.25)
+        avg_excess = sum(excess_values) / len(excess_values) if excess_values else None
+        flags = []
+        if len(passed_symbols) < min_peer_symbols:
+            flags.append('insufficient_peer_symbol_support')
+        if len(passed_cutoffs) < min_cutoff_passes:
+            flags.append('insufficient_cutoff_consistency')
+        if min_trades is not None and min_trades < 10 + min_trade_floor_margin:
+            flags.append('thin_trade_count_margin')
+        if p10_excess is not None and p10_excess < 0:
+            flags.append('negative_p10_excess_tail')
+        if drawdowns and min(drawdowns) < -12:
+            flags.append('left_tail_drawdown_review')
+        validation_role = 'promotion_review_candidate' if not flags else 'validation_priority_only'
+        items.append({
+            'strategy': strategy,
+            'params': dict(params_tuple),
+            'symbols_tested': sorted([s for s in by_symbol if s]),
+            'symbols_tested_count': len([s for s in by_symbol if s]),
+            'passed_symbols': passed_symbols,
+            'passed_symbol_count': len(passed_symbols),
+            'passed_cutoffs': passed_cutoffs,
+            'passed_cutoff_count': len(passed_cutoffs),
+            'avg_oos_excess_pct': round(avg_excess, 2) if avg_excess is not None else None,
+            'p10_oos_excess_pct': round(p10_excess, 2) if p10_excess is not None else None,
+            'p25_oos_excess_pct': round(p25_excess, 2) if p25_excess is not None else None,
+            'worst_oos_drawdown_pct': round(min(drawdowns), 2) if drawdowns else None,
+            'min_oos_trades': min_trades,
+            'validation_role': validation_role,
+            'quality_flags': flags,
+            'next_action': 'peer basket passed breadth/tail checks; eligible for manual promotion review' if validation_role == 'promotion_review_candidate' else 'keep as research/validation priority; do not promote from narrow evidence',
+        })
+
+    items = sorted(
+        items,
+        key=lambda x: (
+            x.get('validation_role') == 'promotion_review_candidate',
+            x.get('passed_symbol_count') or 0,
+            x.get('passed_cutoff_count') or 0,
+            x.get('avg_oos_excess_pct') if x.get('avg_oos_excess_pct') is not None else -999,
+        ),
+        reverse=True,
+    )
+    return {
+        'run_at': datetime.now(timezone.utc).isoformat(),
+        'mode': 'peer_basket_consistency_historical_only',
+        'real_trading': False,
+        'cutoffs': cutoffs,
+        'policy': {
+            'min_peer_symbols': min_peer_symbols,
+            'min_cutoff_passes': min_cutoff_passes,
+            'min_trade_floor_margin': min_trade_floor_margin,
+            'promotion_evidence_policy': 'peer basket metrics are review evidence only; concentration gate still controls promoted_count',
+        },
+        'count': len(items),
+        'promotion_review_candidate_count': sum(1 for x in items if x.get('validation_role') == 'promotion_review_candidate'),
+        'validation_priority_count': sum(1 for x in items if x.get('validation_role') != 'promotion_review_candidate'),
+        'items': items[:50],
+    }
+
 def walk_forward_summary(wf: dict) -> dict:
     rows = wf.get('results') or []
     reason_counts = {}
@@ -312,6 +430,7 @@ def main():
     ap.add_argument('--start', default='2018-01-01')
     ap.add_argument('--output', default=str(DEFAULT_OUTPUT))
     ap.add_argument('--near-miss-quarantine-output', default=str(DEFAULT_NEAR_MISS_QUARANTINE_OUTPUT))
+    ap.add_argument('--peer-basket-output', default=str(DEFAULT_PEER_BASKET_OUTPUT))
     ap.add_argument('--dynamic-symbols', action=argparse.BooleanOptionalAction, default=True, help='Expand fixed anchors with current recommendation and active/watch universe symbols')
     ap.add_argument('--recommendation-symbol-limit', type=int, default=10)
     ap.add_argument('--universe-symbol-limit', type=int, default=10)
@@ -351,9 +470,11 @@ def main():
     research_summary=walk_forward_summary(wf)
     cutoffs=args.cutoffs.split(',')
     near_miss_quarantine=build_near_miss_quarantine(withheld_promotions, cutoffs=cutoffs)
-    packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'bounded_stock_research_historical_only','real_trading':False,'symbols':symbols,'base_symbols':base_symbols,'symbol_expansion':symbol_expansion,'cutoffs':cutoffs,'result_count':result_count,'raw_promoted_count':len(raw_promoted),'promoted_count':promoted_count,'withheld_promoted_count':len(withheld_promotions),'promotion_gates':promotion_gates,'near_miss_quarantine':near_miss_quarantine,'summary':research_summary,'imports':imports,'walk_forward':wf,'promoted':promoted,'withheld_promotions':withheld_promotions,'rejected_ok_count':rejected}
+    peer_basket_validation=build_peer_basket_validation(wf, cutoffs=cutoffs)
+    packet={'run_at':datetime.now(timezone.utc).isoformat(),'mode':'bounded_stock_research_historical_only','real_trading':False,'symbols':symbols,'base_symbols':base_symbols,'symbol_expansion':symbol_expansion,'cutoffs':cutoffs,'result_count':result_count,'raw_promoted_count':len(raw_promoted),'promoted_count':promoted_count,'withheld_promoted_count':len(withheld_promotions),'promotion_gates':promotion_gates,'near_miss_quarantine':near_miss_quarantine,'peer_basket_validation':peer_basket_validation,'summary':research_summary,'imports':imports,'walk_forward':wf,'promoted':promoted,'withheld_promotions':withheld_promotions,'rejected_ok_count':rejected}
     output_artifact=write_json_artifact(args.output, packet, latest_path=DEFAULT_OUTPUT, pointer_path=DEFAULT_OUTPUT_POINTER)
     near_miss_artifact=write_json_artifact(args.near_miss_quarantine_output, near_miss_quarantine, latest_path=DEFAULT_NEAR_MISS_QUARANTINE_OUTPUT, pointer_path=DEFAULT_NEAR_MISS_QUARANTINE_OUTPUT_POINTER)
-    print(json.dumps({'run_at':packet['run_at'],'real_trading':False,'symbols':symbols,'base_symbols':base_symbols,'symbol_expansion':symbol_expansion,'cutoffs':cutoffs,'result_count':result_count,'promoted_count':promoted_count,'withheld_promoted_count':len(withheld_promotions),'near_miss_quarantine_count':near_miss_quarantine.get('count',0),'promotion_gates':promotion_gates,'summary':research_summary,'output':args.output,'latest_output':output_artifact.get('latest_path'),'output_pointer':output_artifact.get('pointer_path'),'near_miss_quarantine_output':args.near_miss_quarantine_output,'near_miss_quarantine_latest_output':near_miss_artifact.get('latest_path'),'near_miss_quarantine_output_pointer':near_miss_artifact.get('pointer_path')},ensure_ascii=False,indent=2))
+    peer_basket_artifact=write_json_artifact(args.peer_basket_output, peer_basket_validation, latest_path=DEFAULT_PEER_BASKET_OUTPUT, pointer_path=DEFAULT_PEER_BASKET_OUTPUT_POINTER)
+    print(json.dumps({'run_at':packet['run_at'],'real_trading':False,'symbols':symbols,'base_symbols':base_symbols,'symbol_expansion':symbol_expansion,'cutoffs':cutoffs,'result_count':result_count,'promoted_count':promoted_count,'withheld_promoted_count':len(withheld_promotions),'near_miss_quarantine_count':near_miss_quarantine.get('count',0),'peer_basket_promotion_review_candidate_count':peer_basket_validation.get('promotion_review_candidate_count',0),'peer_basket_validation_priority_count':peer_basket_validation.get('validation_priority_count',0),'promotion_gates':promotion_gates,'summary':research_summary,'output':args.output,'latest_output':output_artifact.get('latest_path'),'output_pointer':output_artifact.get('pointer_path'),'near_miss_quarantine_output':args.near_miss_quarantine_output,'near_miss_quarantine_latest_output':near_miss_artifact.get('latest_path'),'near_miss_quarantine_output_pointer':near_miss_artifact.get('pointer_path'),'peer_basket_output':args.peer_basket_output,'peer_basket_latest_output':peer_basket_artifact.get('latest_path'),'peer_basket_output_pointer':peer_basket_artifact.get('pointer_path')},ensure_ascii=False,indent=2))
 
 if __name__=='__main__': main()

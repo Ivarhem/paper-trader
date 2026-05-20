@@ -291,8 +291,8 @@ function humanDecisionSummary(row) {
   }
   const why = saved.why_now || [
     supports[0] ? `긍정 근거는 ${supports[0].label}입니다.` : '',
-    excess !== undefined && excess !== null ? `상위 active 전략의 평균 초과수익은 보조 랭킹 근거로만 반영됩니다.` : '',
-    auditFlags.length ? `전략 신뢰 라벨은 ${auditFlags.slice(0,2).map((f)=>auditFlagLabel(f,false)).join(', ')}입니다.` : '조건 라벨 보강 후 재평가가 필요합니다.'
+    excess !== undefined && excess !== null ? `보조 검증 신호의 시장 대비 성과는 후보 유지/보류 판단에만 반영됩니다.` : '',
+    auditFlags.length ? `주의 라벨은 ${auditFlags.slice(0,2).map((f)=>auditFlagLabel(f,false)).join(', ')}입니다.` : '조건 라벨 보강 후 재평가가 필요합니다.'
   ].filter(Boolean).join(' ');
   const mainRisk = saved.main_risk || blockers[0]?.label || cautions[0]?.label || (row.risk_notes || [])[0]?.replace('관망 이유: ', '') || '뚜렷한 차단 사유는 제한적입니다.';
   let committeeView = saved.committee_view || '';
@@ -367,8 +367,17 @@ function plainDecisionLine(row, human) {
   const action = row.recommendation_bucket_label || row.action_label || row.action || '관찰';
   const blockers = row.presentation?.primary_blockers || [];
   const score = row.score != null ? `점수 ${fmt(row.score)}` : '점수 확인 중';
-  const firstBlocker = blockers[0] || human?.mainRisk || '추가 확인 필요';
+  const firstBlocker = readableRiskSummary(blockers[0] || human?.mainRisk || '추가 확인 필요');
   return `${action} · ${score} · 핵심 주의: ${firstBlocker}`;
+}
+
+function readableRiskSummary(text) {
+  if (!text) return text;
+  let out = String(text).trim();
+  out = out.replace(/실거래\s*가능\s*전략\s*0개/g, '실거래 승격 없음');
+  out = out.replace(/고신뢰\s*과거검증\s*전략\s*없음/g, '고신뢰 과거검증 미확인');
+  out = out.replace(/no candidate buy signals/gi, '매수 후보 신호 없음');
+  return out;
 }
 
 function plainSummaryBullets(row, human) {
@@ -389,7 +398,7 @@ function recStatusChips(row) {
   chips.push(`<span class="rec-chip ${targetAdj ? 'warn' : 'neutral'}">목표수익률 ${targetAdj?.adjustment_pct_points ?? 0}%p</span>`);
   chips.push(`<span class="rec-chip ${vb.target_adjustment_applied_count ? 'good' : (vb.target_adjustment_count ? 'warn' : 'neutral')}">개선게이트 ${vb.target_adjustment_applied_count || 0}/${vb.target_adjustment_count || 0}</span>`);
   const auditScore = row.presentation?.audit_summary?.min_quality_score ?? vb.audit_quality_min_score;
-  if (auditScore !== undefined && auditScore !== null) chips.push(`<span class="rec-chip ${Number(auditScore) >= 60 ? 'good' : 'warn'}">전략 신뢰 ${fmt(auditScore)}</span>`);
+  if (auditScore !== undefined && auditScore !== null) chips.push(`<span class="rec-chip ${Number(auditScore) >= 60 ? 'good' : 'warn'}">조건 신뢰 ${fmt(auditScore)}</span>`);
   if (row.trade_eligible) chips.push(`<span class="rec-chip good">Paper 후보</span>`);
   return chips.length ? `<div class="rec-chip-row">${chips.join('')}</div>` : '';
 }
@@ -398,6 +407,7 @@ function recStatusChips(row) {
 function readableEvidenceText(text) {
   if (!text) return text;
   let out = String(text);
+  out = readableRiskSummary(out);
   out = out.replace(/시장별 전략 평균 초과수익/g, '시장 대비 전략 성과');
   out = out.replace(/상위 신호 평균 초과수익/g, '상위 신호 시장 대비 성과');
   out = out.replace(/audit hard downgrade/g, 'Audit 하드 다운그레이드');
@@ -450,7 +460,7 @@ function riskGateDisplay(row, risk = {}) {
   if (hard) return {label:'승인 차단', kind:'bad', reason: critic.summary || 'critic high / hard risk가 있어 paper-buy 승인을 차단합니다.'};
   if (hasTail) return {label:'승인 보류', kind:'warn', reason:'tail-risk / negative EV / 평균 초과수익 플래그가 남아 있어 paper-buy 승인은 보류합니다.'};
   if (under || noEdge) return {label:'검증대기', kind:'warn', reason:'종목별 샘플 또는 positive edge가 부족해 추가 검증이 필요합니다.'};
-  if (lowWin) return {label:'승인 보류', kind:'warn', reason:'전략 신뢰 라벨이 아직 paper-buy 승인에는 보수적으로 해석됩니다.'};
+  if (lowWin) return {label:'승인 보류', kind:'warn', reason:'조건 라벨이 아직 paper-buy 승인에는 보수적으로 해석됩니다.'};
   if (risk.decision === 'blocked') return {label:'승인 보류', kind:'warn', reason:'RiskGate가 paper-buy 승인에는 아직 충분하지 않다고 판단했습니다.'};
   if (risk.decision === 'needs_more_validation') return {label:'검증대기', kind:'warn', reason:'추가 검증 후 재평가가 필요한 후보입니다.'};
   return {label:risk.decision || '검토 전', kind:'neutral', reason:'RiskGate 검토 전입니다.'};
@@ -532,6 +542,7 @@ function committeeEvidenceBlock(row, fallbackText='') {
   const riskView = riskGateDisplay(row, risk);
   if (research.decision || research.score !== undefined) rows.push({label:'연구판단', value:`${researchDecisionLabel(research.decision)} · ${fmt(research.score)}`, kind:String(research.decision || '').includes('support') ? 'good' : (research.decision === 'ignore' ? 'neutral' : 'warn')});
   if (risk.decision || risk.score !== undefined) rows.push({label:'승인게이트', value:`${riskView.label} · ${fmt(risk.score)}`, kind:riskView.kind});
+  if (syn.market_context?.market_stress_reasons?.length) rows.push({label:'보류맥락', value:syn.market_context.market_stress_reasons.slice(0, 2).join(' · '), kind:riskView.kind === 'good' ? 'neutral' : 'warn'});
   if (!rows.length && decision) rows.push({label:'위원회', value:decisionLabel, kind:decision === 'committee_support' ? 'good' : (decision === 'reject' ? 'warn' : 'neutral')});
   const actionLabel = (o) => ({support:'지지', oppose:'반대', watch:'관찰'}[o.opinion] || o.opinion || '-');
   const reasonText = (o) => (o.concerns || o.supports || []).filter(Boolean).slice(0, 2).join(' · ') || o.reason || o.rationale || '';
@@ -545,12 +556,14 @@ function committeeEvidenceBlock(row, fallbackText='') {
     return `<p class="${op}"><b>${op === 'support' ? '지지' : '반대'}</b><span>${names.join(' · ')}</span></p>`;
   }).join('');
   const split = grouped ? `<div class="committee-readable-split committee-members-only">${grouped}</div>` : '';
-  const summary = syn.summary || fallbackText || row.regime_gate?.reason || '위원회/게이트 추가 검토 전';
+  const summary = syn.readable_summary || syn.summary || fallbackText || row.regime_gate?.reason || '위원회/게이트 추가 검토 전';
   const approvalNote = riskView ? `<p class="risk-gate-readable ${riskView.kind}"><b>${riskView.label}</b><span>${riskView.reason}</span></p>` : '';
+  const aggressiveNote = syn.market_context?.aggressive_note ? `<p class="risk-gate-readable neutral"><b>공격형</b><span>${syn.market_context.aggressive_note}</span></p>` : '';
   return `<div class="committee-evidence-block ${decision || 'pending'} ${riskView?.kind || ''}">
     <div class="committee-evidence-head"><span>위원회 판단</span><b>${decisionLabel}</b></div>
     ${rows.length ? evidencePills(rows) : ''}
     ${approvalNote}
+    ${aggressiveNote}
     ${split || `<p class="evidence-readable-line">${summary}</p>`}
     ${opinionRows ? `<ul class="committee-opinion-list committee-action-list"><li class="committee-action-header"><b>위원회</b><span>제안액션</span><em>근거</em></li>${opinionRows}</ul>` : ''}
   </div>`;
@@ -622,11 +635,11 @@ function fundEvidenceBlock(row, vb) {
       <li class="fund-evidence-header"><b>항목</b><span>상태</span><em>설명</em></li>
       ${rows.map((r) => `<li class="${r.kind || 'neutral'}"><b>${r.item}</b><span class="${r.kind || 'neutral'}">${r.state}</span><em>${r.desc}</em></li>`).join('')}
     </ul>
-    <div class="evidence-link-row"><button type="button" onclick="goMonitorTab('funds','[data-tab-panel=\'funds\']')">엔진/Fund 메뉴에서 보기</button><small>Fund evidence는 가격 replay/league 기반 참고자료이며, paper-buy 승인이나 추천 결정을 단독으로 대체하지 않습니다.</small></div>
+    <div class="evidence-link-row"><button type="button" onclick="goMonitorTab('funds','[data-tab-panel=\'funds\']')">Fund 엔진에서 보기</button><small>Fund consensus와 가격 replay가 현재 추천 후보 선정의 1차 근거입니다.</small></div>
   </div>`;
 }
 
-function compactEvidenceStatus(row, vb = {}) {
+function compactEvidenceStatus(row, vb = {}, blockers = [], human = {}) {
   const syn = row.investment_committee?.synthesis || {};
   const risk = syn.risk_gate || {};
   const research = syn.research_committee || {};
@@ -643,11 +656,13 @@ function compactEvidenceStatus(row, vb = {}) {
   const fundKind = fundVotes > 0 ? 'good' : (styleCount ? 'warn' : 'neutral');
   const fundLabel = fundVotes > 0 ? `${fundVotes}표 · score ${fmt(fund.weighted_score)}` : (styleCount ? '스타일 proxy만 있음' : '종목 합의 없음');
   const auditKind = Number(auditScore || 0) >= 70 ? 'good' : (Number(auditScore || 0) >= 50 ? 'warn' : 'bad');
+  const riskText = readableRiskSummary(blockers.length ? blockers.slice(0, 1).join('') : (human.mainRisk || '추가 주의사항 낮음'));
   return `<div class="rec-evidence-strip" aria-label="추천 판단 근거 요약">
+    <span class="warn"><b>핵심 주의</b><em>${riskText}</em><small>가격 계획과 분리된 리스크 요약</small></span>
     <span class="${committeeKind}"><b>위원회</b><em>${committeeLabel}</em><small>${research.decision ? `Research ${researchDecisionLabel(research.decision)} ${fmt(research.score)}` : '검토 전'}</small></span>
     <span class="${riskView.kind}"><b>Risk Gate</b><em>${riskView.label}</em><small>${risk.score !== undefined ? `score ${fmt(risk.score)}` : riskView.reason}</small></span>
-    <span class="${fundKind}"><b>Fund evidence</b><em>${fundLabel}</em><small>추천 대체 아님 · 보조 evidence</small></span>
-    <span class="${auditKind}"><b>전략 신뢰 라벨</b><em>${auditLabel}</em><small>${auditHint}</small></span>
+    <span class="${fundKind}"><b>Fund consensus</b><em>${fundLabel}</em><small>선정 근거 · 가격 합의 확인</small></span>
+    <span class="${auditKind}"><b>조건 라벨</b><em>${auditLabel}</em><small>${auditHint}</small></span>
   </div>`;
 }
 
@@ -656,33 +671,68 @@ function entryPlanBlock(row = {}) {
   if (!plan || !Object.keys(plan).length) return '';
   const rr = plan.reward_risk_from_target_buy;
   const mode = plan.label || '분할 진입 기준';
+  const posture = pricePostureBadge(row);
   return `<section class="price-plan-section entry" aria-label="진입 계획">
-    <div class="price-plan-section-head"><b>진입 계획</b><span>${mode}</span></div>
+    <div class="price-plan-section-head"><b>진입 계획</b><span>${mode}</span>${posture}</div>
     <div class="price-plan-cells">
-      <div><span>기준 매입가</span><b>${fmt(plan.target_buy_price)}</b><em>${pct(plan.target_buy_pullback_pct)} 하단 선호</em></div>
-      <div class="decision"><span>진입 상단</span><b>${fmt(plan.acceptable_entry_upper)}</b><em>${pct(plan.acceptable_entry_pullback_pct)} 초과 시 관망</em></div>
-      <div class="risk"><span>추격 금지선</span><b>${fmt(plan.chase_above_price)}</b><em>초과 추격 금지</em></div>
+      <div class="${pricePlanCellClass(row, 'entry_lower', ['entry_band'])}"><span>목표 매입가</span><b>${fmt(plan.target_buy_price)}</b><em>${pct(plan.pullback_from_analysis_price_pct)} 하단 대기</em></div>
+      <div class="${pricePlanCellClass(row, 'entry_upper', ['entry_band'])}"><span>진입 상단</span><b>${fmt(plan.acceptable_entry_upper)}</b><em>${pct(plan.acceptable_entry_pullback_pct)} 이상은 관망</em></div>
+      <div class="${pricePlanCellClass(row, 'chase_above', [], 'risk')}"><span>추격 금지선</span><b>${fmt(plan.chase_above_price)}</b><em>이상 추격 금지</em></div>
       <div><span>보상/위험</span><b>${fmt(rr)}</b><em>진입 구간 기준</em></div>
     </div>
   </section>`;
 }
 
+function priceHighlightTargets(row = {}) {
+  const syn = row.investment_committee?.synthesis || {};
+  const raw = row.highlight_targets || syn.highlight_targets || row.validation_basis?.highlight_targets || [];
+  return new Set(Array.isArray(raw) ? raw : []);
+}
+
+function hasPriceHighlight(row, key, aliases = []) {
+  const targets = priceHighlightTargets(row);
+  return targets.has(key) || aliases.some((alias) => targets.has(alias));
+}
+
+function pricePlanCellClass(row, key, aliases = [], base = '') {
+  return [base, hasPriceHighlight(row, key, aliases) ? 'decision' : ''].filter(Boolean).join(' ');
+}
+
+function postureLabel(posture) {
+  return {
+    defensive: '보수 강조',
+    balanced: '균형 강조',
+    aggressive: '공격 강조',
+    avoid: '리스크 강조',
+    take_profit: '실현 강조',
+  }[posture] || '';
+}
+
+function pricePostureBadge(row = {}) {
+  const syn = row.investment_committee?.synthesis || {};
+  const posture = row.committee_posture || syn.committee_posture;
+  const label = postureLabel(posture);
+  const reason = row.posture_reason || syn.posture_reason || '';
+  if (!label && !reason) return '';
+  return `<em class="price-posture ${posture || 'neutral'}" title="${reason || label}">${label || '강조 기준'}</em>`;
+}
+
 function pricePlanBlock(row = {}) {
   return `<div class="rec-product-price-plan" aria-label="추천 가격 계획">
-    <section class="price-plan-section context" aria-label="가격 기준">
-      <div class="price-plan-section-head"><b>가격 기준</b><span>${priceDateLabel(row)}</span></div>
+    <section class="price-plan-section context" aria-label="현재 가격 기준">
+      <div class="price-plan-section-head"><b>현재가</b><span>${priceDateLabel(row)}</span></div>
       <div class="price-plan-cells one">
-        <div class="price-context"><span>현재가</span><b>${fmt(row.last_price)}</b><em>분석 기준가</em></div>
+        <div class="${pricePlanCellClass(row, 'current_price', [], 'reference')}"><span>분석 기준가</span><b>${fmt(row.last_price)}</b><em>현재 가격 기준</em></div>
       </div>
     </section>
     ${entryPlanBlock(row)}
     <section class="price-plan-section exit" aria-label="이탈 계획">
-      <div class="price-plan-section-head"><b>이탈 계획</b><span>방어선 / 목표 범위</span></div>
+      <div class="price-plan-section-head"><b>가격 계획</b><span>${priceDateLabel(row)}</span></div>
       <div class="price-plan-cells">
-        <div class="decision"><span>1차 실현가</span><b>${fmt(row.target_1 || row.conservative_target_price || row.target_price)}</b><em>${pct(row.upside_1_pct || row.upside_target_1_pct || row.upside_pct)}</em></div>
-        <div><span>중심 목표가</span><b>${fmt(row.target_2 || row.adjusted_target_price || row.target_price)}</b><em>${pct(row.upside_2_pct || row.upside_target_2_pct || row.upside_pct)}</em></div>
-        <div><span>확장 목표가</span><b>${fmt(row.target_3 || row.optimistic_target_price || row.target_price)}</b><em>${pct(row.upside_3_pct || row.upside_target_3_pct || row.upside_pct)}</em></div>
-        <div class="risk wide"><span>무효화·손절선</span><b>${fmt(row.stop_reference)}</b><em>${pct(row.downside_stop_pct)} 이탈 시 계획 무효</em></div>
+        <div class="${pricePlanCellClass(row, 'target_1')}"><span>1차 실현 기준</span><b>${fmt(row.target_1 || row.conservative_target_price || row.target_price)}</b><em>${pct(row.upside_1_pct || row.upside_target_1_pct || row.upside_pct)}</em></div>
+        <div class="${pricePlanCellClass(row, 'target_2')}"><span>중심 목표</span><b>${fmt(row.target_2 || row.adjusted_target_price || row.target_price)}</b><em>${pct(row.upside_2_pct || row.upside_target_2_pct || row.upside_pct)}</em></div>
+        <div class="${pricePlanCellClass(row, 'target_3')}"><span>확장 목표</span><b>${fmt(row.target_3 || row.optimistic_target_price || row.target_price)}</b><em>${pct(row.upside_3_pct || row.upside_target_3_pct || row.upside_pct)}</em></div>
+        <div class="${pricePlanCellClass(row, 'stop_reference', [], 'risk wide')}"><span>무효화·손절 기준</span><b>${fmt(row.stop_reference)}</b><em>${pct(row.downside_stop_pct)} 이탈 시 계획 무효</em></div>
       </div>
     </section>
   </div>`;
@@ -1064,7 +1114,7 @@ function renderRecommendationSections(targetId, rows) {
   const buckets = {approved:[], research_watch:[], watch:[], rejected:[]};
   rows.forEach((row)=>{ const k=recommendationBucket(row); (buckets[k] || buckets.watch).push(row); });
   const bucketCounts = Object.fromEntries(Object.entries(buckets).map(([k,v])=>[k,v.length]));
-  target.innerHTML = `<div class="recommendation-card-surface"><div class="recommendation-section-head rec-card-surface-head"><div><h3>추천 후보 카드</h3><p>종목추천은 카드형으로 빠르게 비교합니다. Fund는 추천을 대체하지 않고 각 카드의 참고 evidence로만 사용합니다.</p></div><span>${rows.length}개</span></div><div class="rec-filter-summary"><span>매수 ${bucketCounts.approved||0}</span><span>검증대기 ${bucketCounts.research_watch||0}</span><span>관찰 ${bucketCounts.watch||0}</span><span>보류 ${bucketCounts.rejected||0}</span></div>${renderHighScoreRejectedCallout(rows)}${renderRecommendationBucket('매수 후보','조건을 가장 많이 통과한 후보입니다. 가격계획과 risk gate를 먼저 확인하세요.',buckets.approved)}${renderRecommendationBucket('검증대기 관찰','추가 확인/샘플이 필요한 연구 후보입니다.',buckets.research_watch)}${renderRecommendationBucket('관찰','현재는 watch 성격이 강한 후보입니다.',buckets.watch)}${renderRecommendationBucket('제외/보류','근거가 약하거나 risk/audit gate에서 밀린 후보입니다.',buckets.rejected)}</div>`;
+  target.innerHTML = `<div class="recommendation-card-surface"><div class="recommendation-section-head rec-card-surface-head"><div><h3>추천 후보</h3><p>Fund consensus 기준 후보입니다. 가격 계획과 gate만 먼저 표시하고 세부 evidence는 접어둡니다.</p></div><span>${rows.length}개</span></div><div class="rec-filter-summary"><span>매수 ${bucketCounts.approved||0}</span><span>검증대기 ${bucketCounts.research_watch||0}</span><span>관찰 ${bucketCounts.watch||0}</span><span>보류 ${bucketCounts.rejected||0}</span></div>${renderHighScoreRejectedCallout(rows)}${renderRecommendationBucket('매수 후보','가격계획과 risk gate를 먼저 확인하세요.',buckets.approved)}${renderRecommendationBucket('검증대기','추가 확인/샘플이 필요한 후보입니다.',buckets.research_watch)}${renderRecommendationBucket('관찰','Fund consensus는 있으나 paper-buy 승인은 아직 보류된 후보입니다.',buckets.watch)}${renderRecommendationBucket('제외/보류','근거가 약하거나 gate에서 밀린 후보입니다.',buckets.rejected)}</div>`;
 }
 
 
@@ -1354,6 +1404,15 @@ function shortHorizonStat(row) {
   return compactStat('보정관찰', main, m.h5 ? '2D / 5D' : '2D');
 }
 
+function recommendationSourceText(row = {}) {
+  const source = row.recommendation_source_model || '';
+  const targetSource = row.target_price_source || '';
+  const isFund = source.includes('fund') || targetSource.includes('fund');
+  if (isFund && targetSource.includes('invalidated')) return 'Fund 선정 · 가격합의 무효화';
+  if (isFund) return 'Fund 선정 · 가격합의 반영';
+  return source ? source.replaceAll('_', ' ') : '선정 근거 확인';
+}
+
 function renderRecommendationCard(row, idx) {
   try {
     const criticIssues = row.critic?.issues?.length ? row.critic.issues : [row.critic?.summary || '뚜렷한 반대 근거는 제한적입니다'];
@@ -1392,28 +1451,22 @@ function renderRecommendationCard(row, idx) {
         <div class="rec-product-core">
           <div class="rec-decision-score"><b>${fmt(row.score)}</b><span>판단점수</span><em>${row.confidence_grade?.label || row.confidence_grade || '검증 기반'}</em></div>
           <div class="rec-decision-copy"><strong>${human.headline || primaryReason}</strong><p>${primaryReason || human.mainRisk || '-'}</p></div>
-          <div class="rec-decision-meta">
+          <div class="rec-decision-meta compact-source">
+            <span><b>기준</b>${recommendationSourceText(row)}</span>
             <span><b>기간</b>${row.expected_period || ((row.horizon_days || 20) + '거래일')}</span>
-            <span><b>전략</b>${row.best_logic_label || row.best_logic || row.logic || '-'}</span>
-            <span><b>라벨</b>${(vb.audit_quality_flags || []).slice(0,1).map((f)=>auditFlagLabel(f,false)).join('') || row.confidence_grade?.label || '조건 확인'}</span>
           </div>
         </div>
 
         ${pricePlanBlock(row)}
 
-        <div class="rec-product-risk-group" aria-label="추천 제약 요약">
-          <span><b>목표보정</b>${targetAdjustmentText(row)}</span>
-          <span><b>Gate</b>${row.trade_eligible ? 'paper 후보' : riskGateDisplay(row, row.investment_committee?.synthesis?.risk_gate || {}).label}</span>
-          <span><b>Risk</b>${blockers.length ? blockers.slice(0,1).join('') : human.mainRisk}</span>
-        </div>
-        ${compactEvidenceStatus(row, vb)}
+        ${compactEvidenceStatus(row, vb, blockers, human)}
 
-        <button class="rec-detail-toggle rec-evidence-toggle" data-detail-target="${detailId}" aria-expanded="false" onclick="toggleRecDetail('${detailId}')">펼치기 · 보조 evidence · 위원회 / 전략 신뢰 / Fund / 시장</button>
+        <button class="rec-detail-toggle rec-evidence-toggle" data-detail-target="${detailId}" aria-expanded="false" onclick="toggleRecDetail('${detailId}')">펼치기 · 상세 근거 / 위원회 / Risk / 시장</button>
         <div id="${detailId}" class="rec-lazy-detail rec-evidence-drawer" hidden>
           <section class="rec-evidence-source internal"><h4>추천엔진 근거</h4>${listBlock('긍정 근거', positives.length ? positives : coreReasons, 'positive')}${listBlock('차단/주의 요인', blockers.length ? blockers : checkReasons, 'caution')}${listBlock('다음 확인', nextChecks.length ? nextChecks : (row.risk_notes || []).concat(portfolioNotes), 'neutral')}</section>
           <section class="rec-evidence-source committee"><h4>위원회 / Risk Gate <small>판단 흐름</small></h4>${committeeEvidenceBlock(row, committeeText)}</section>
-          <section class="rec-evidence-source audit"><h4>전략 신뢰/국면 라벨 <small>성과·위험 해석</small></h4>${auditEvidenceBlock(row, vb)}</section>
-          <section class="rec-evidence-source fund"><h4>Fund evidence <small>참고자료</small></h4>${fundEvidenceBlock(row, vb)}</section>
+          <section class="rec-evidence-source audit"><h4>보조 신호/국면 라벨 <small>성과·위험 해석</small></h4>${auditEvidenceBlock(row, vb)}</section>
+          <section class="rec-evidence-source fund"><h4>Fund consensus <small>선정 근거</small></h4>${fundEvidenceBlock(row, vb)}</section>
           <section class="rec-evidence-source supply"><h4>수급/거래주체 evidence <small>보조자료</small></h4>${supplyEvidenceBlock(row, vb)}</section>
           <section class="rec-evidence-source market"><h4>시장/이슈 evidence <small>별도 소스</small></h4>${marketEvidenceBlock(row, marketText)}</section>
         </div>
@@ -1434,7 +1487,7 @@ function symbolDecision(r) {
   if (ev.action === 'candidate_buy_zone') return {label: score >= 70 ? '매수 후보' : '약한 매수 후보', grade: score >= 70 ? 'good' : 'caution', buy_opinion:true, reason:`active 전략 매수 후보 신호 · 점수 ${fmt(score)}`, checklist:['추천 사유 확인','손절 기준 확인','최신 공시 확인']};
   if (r.recommendation_hint === 'historically_supported_watch_candidate') return {label:'관심 관찰 후보', grade:'neutral', buy_opinion:false, reason:'현재 매수 신호는 없지만 과거 검증 성과가 양호합니다.', checklist:['active 신호 대기','관심종목 모니터링']};
   if (r.recommendation_hint === 'weak_historical_edge') return {label:'매수 근거 약함', grade:'danger', buy_opinion:false, reason:'과거 검증 edge가 약합니다.', checklist:['성과 개선 전 보류']};
-  return {label:'매수의견 없음', grade:'neutral', buy_opinion:false, reason:'현재 active 매수 신호가 없습니다.', checklist:['active 전략 신호 확인']};
+  return {label:'매수의견 없음', grade:'neutral', buy_opinion:false, reason:'현재 active 매수 신호가 없습니다.', checklist:['active 보조 신호 확인']};
 }
 function decisionBadge(d){ return `<span class="decision-badge ${d.grade || 'neutral'}">${d.label || '-'}</span>`; }
 function decisionPanel(r){ const d=symbolDecision(r); return `<div class="decision-panel ${d.grade || 'neutral'}"><div><span class="decision-kicker">최종 판정</span><strong>${d.label || '-'}</strong><em>${d.buy_opinion ? '매수 의견 있음' : '매수 의견 아님'}</em></div><p>${d.reason || '-'}</p><ul>${(d.checklist||[]).map(x=>`<li>${x}</li>`).join('')}</ul></div>`; }
@@ -1900,6 +1953,26 @@ const AGENT_STRATEGY_CATALOG = {
     strategy: '조직평가 findings를 자동적용/관찰/승인필요로 분류하고, low-risk reversible maintenance만 자동 적용한다.',
     guardrail: '전략 임계값, evaluator 추가/제거, pipeline 구조 변경, 외부 서비스 변경은 자동 적용하지 않고 승인 대상으로 남긴다.'
   },
+  strategy_director: {
+    name: 'Strategy Director', role: '전략 총괄',
+    strategy: '전략 생성/검증/수명주기/audit agent들이 자기 역할대로 일하는지 평가하고 다음 cycle 검증 과제를 배정한다.',
+    guardrail: '전략 상태의 canonical writer는 strategy_lifecycle이며, 총괄은 평가/배정 contract만 낸다.'
+  },
+  fund_director: {
+    name: 'Fund Director', role: 'Fund 총괄',
+    strategy: 'paper fund 리그, registry, 성과평가, risk guardian, consensus 품질을 관리하고 fund risk가 과잉 차단 신호가 되지 않게 감시한다.',
+    guardrail: 'fund consensus는 추천 overlay이며 실제 주문/단독 매수 신호가 아니다.'
+  },
+  recommendation_desk_lead: {
+    name: 'Recommendation Desk Lead', role: '추천 총괄',
+    strategy: '추천 생성, critic, risk, regime, committee, validation이 서로 다른 의견 타입을 내는지 평가한다.',
+    guardrail: '최종 추천 필드는 기존 recommendation/committee flow가 유지하고 총괄은 역할 적합성과 병목만 판정한다.'
+  },
+  executive_director: {
+    name: 'Executive Organization Director', role: '전체 조직 총괄',
+    strategy: '도메인 총괄과 suborg compact 상태를 읽어 조직 병목, escalation, 다음 cycle 우선순위를 정리한다.',
+    guardrail: '조직 감독 contract만 발행하며 추천 승인, 정책 변경, 주문을 직접 수행하지 않는다.'
+  },
   org_evaluator: {
     name: 'Org Evaluator', role: '조직 메타 평가',
     strategy: 'coverage, active pool, 실패/스킵, 중복/과최적화, 신규 에이전트 필요성을 평가하고 개선 제안을 만든다.',
@@ -1911,56 +1984,212 @@ function normalizeAgentKey(name) {
   return String(name || '').replace(/\.py$/,'').replace(/-/g,'_').toLowerCase();
 }
 
+function humanizeAgentName(name) {
+  return String(name || '')
+    .replace(/\.py$/,'')
+    .replace(/[_-]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || 'Unknown Agent';
+}
+
 function agentStrategyDescriptions(pipelineSteps = []) {
   const seen = new Set();
   const rows = [];
   (pipelineSteps || []).forEach((step) => {
     const key = normalizeAgentKey(step.agent || (step.cmd || [])[1]?.split('/').pop());
-    if (AGENT_STRATEGY_CATALOG[key] && !seen.has(key)) {
+    if (!seen.has(key)) {
       seen.add(key);
-      rows.push({...AGENT_STRATEGY_CATALOG[key], name: step.display_name || AGENT_STRATEGY_CATALOG[key].name, role: step.role_summary || AGENT_STRATEGY_CATALOG[key].role, status: step.status || '-', last_run: step.ended_at || step.started_at, warnings: step.warnings || []});
+      const meta = AGENT_STRATEGY_CATALOG[key] || {};
+      rows.push({
+        key,
+        name: step.display_name || meta.name || key,
+        role: step.role_summary || meta.role || '역할 요약 미등록',
+        strategy: step.description || step.strategy || meta.strategy || (step.role_summary ? `${step.role_summary} 역할을 수행하며 pipeline artifact와 contract를 남긴다.` : 'pipeline 실행 결과와 output contract로 역할 수행 여부를 확인한다.'),
+        guardrail: meta.guardrail || '권한이 명시되지 않은 agent는 proposal/context/validation 출력만 생성하며 추천 승인이나 주문을 직접 수행하지 않는다.',
+        status: step.status || '-',
+        last_run: step.ended_at || step.started_at,
+        warnings: step.warnings || []
+      });
     }
   });
   return rows;
 }
 
 
-const ORG_PIPELINE_LANES = [
-  {key:'input', title:'1. 추천 입력 데이터', agents:['pipeline_smoke_check','universe_discovery','daily_price_refresh','opendart_disclosures','sec_edgar_disclosures','universe_curator','opendart_financials','data_quality','market_regime_gate','strategy_context_router']},
-  {key:'fund', title:'2. Fund 성향 / 전략 선택 엔진', agents:['paper_fund_simulator','paper_fund_historical_replay','paper_fund_price_replay','fund_registry','fund_performance_evaluator','fund_risk_guardian','fund_consensus']},
-  {key:'recommend', title:'3. 종목추천 결정', agents:['recommendation_agent','recommendation_critic','portfolio_risk_manager','investment_committee','current_recommendation_validation']},
-  {key:'strategy_dna', title:'4. 전략 DNA / 국면별 신뢰도 연구', agents:['strategy_generator','capacity_planner','simulation_validation_worker','strategy_novelty_pruner','strategy_lifecycle','active_strategy_balancer','strategy_success_optimizer','strategy_context_outcome_ledger']},
-  {key:'audit', title:'5. 전략 검증 · 신뢰도 라벨링', agents:['committee_performance_ledger','recommendation_outcome_tracker','recommendation_funnel','recommendation_calibration','supply_weight_evaluator','target_return_adjustment_evaluator','recommendation_audit','outcome_attribution']},
-  {key:'meta', title:'6. 조직 메타평가', agents:['org_evaluator','org_improvement_guardian']},
-];
-
-function pipelineStepMap(steps = []) {
-  const m = new Map();
-  (steps || []).forEach((step) => m.set(normalizeAgentKey(step.agent || (step.cmd || [])[1]?.split('/').pop()), step));
-  return m;
+function supervisorDomainLabel(key, row = {}) {
+  const labels = {
+    executive_director: 'Executive Director',
+    data_steward: 'Data / Price Office',
+    market_context_director: 'Market Context',
+    strategy_director: 'Strategy Lab',
+    fund_director: 'Fund Research',
+    recommendation_desk_lead: 'Recommendation Desk',
+    governance_director: 'Governance',
+    org_evaluator: 'Org Evaluator'
+  };
+  return row.title || labels[key] || key;
 }
 
-function renderOrgTopology(steps = [], evalPayload = {}) {
-  const stepMap = pipelineStepMap(steps);
-  const html = ORG_PIPELINE_LANES.map((lane) => {
-    const cards = lane.agents.filter((key) => stepMap.has(key)).map((key) => {
-      const meta = AGENT_STRATEGY_CATALOG[key] || {name:key, role:'-', strategy:'-'};
-      const step = stepMap.get(key);
-      const status = step?.status || 'not_run';
-      const warnings = step?.warnings || [];
-      const outputCount = step?.outputs ? Object.keys(step.outputs).length : 0;
-      return `<div class="org-node ${status}"><div class="org-node-head"><b>${step?.display_name || meta.name}</b><span class="${badgeClass(status)}">${status}</span></div><p>${step?.role_summary || meta.role}</p><small>${step?.ended_at ? new Date(step.ended_at).toLocaleTimeString() : '-'} · outputs ${outputCount}${warnings.length ? ` · warnings ${warnings.length}` : ''}</small></div>`;
-    }).join('');
-    return `<section class="org-lane"><h4>${lane.title}</h4>${cards || '<div class="empty-state">이번 pipeline에서 실행된 agent가 없습니다.</div>'}</section>`;
+function supervisorStatusClass(status) {
+  const value = String(status || '').toLowerCase();
+  if (['ok','healthy','normal'].includes(value)) return 'good';
+  if (['watch','degraded','action_required'].includes(value)) return 'warn';
+  if (['urgent','failed','failed_required','error'].includes(value)) return 'bad';
+  return 'neutral';
+}
+
+function supervisorStatusLabel(status) {
+  const value = String(status || '').toLowerCase();
+  const labels = {
+    ok: '정상', healthy: '정상', normal: '정상',
+    watch: '관찰', degraded: '주의', action_required: '조치 필요',
+    urgent: '긴급', failed: '실패', failed_required: '복구 필요', error: '오류',
+    unknown: '확인 중'
+  };
+  return labels[value] || humanizeAgentName(value || 'unknown');
+}
+
+function readableSupervisorSummary(row = {}) {
+  const raw = row.display_summary || row.role_summary || row.bottleneck || row.architecture_summary || row.purpose || row.domain || row.summary_text || '';
+  const text = String(raw || '도메인 supervisor 상태와 관리 agent 묶음입니다.');
+  const replacements = {
+    data_freshness_or_quality_requires_repair: '가격/데이터 신선도 또는 품질 보강이 필요합니다.',
+    no_high_confidence_historical_active_strategy: '고신뢰 historical active 전략 풀이 부족해 후보 확장이 필요합니다.',
+    no_action_required: '즉시 조치가 필요한 항목은 없습니다.'
+  };
+  return replacements[text] || text.replace(/_/g, ' ');
+}
+
+function readableSupervisorMetricText(row = {}) {
+  const metrics = row.metrics || row.summary || {};
+  const pairs = [
+    ['review_count', '검토'],
+    ['action_count', '조치'],
+    ['watch_count', '관찰'],
+    ['scheduled_agent_count', '스케줄'],
+    ['role_fitness_avg', '적합도'],
+    ['guardian_auto_applied', '자동처리'],
+    ['health_score', '건강점수'],
+  ];
+  const parts = pairs
+    .map(([key, label]) => metrics?.[key] != null ? `${label}: ${fmt(metrics[key])}` : null)
+    .filter(Boolean);
+  if (row.role_fitness_avg != null && !parts.some((part) => part.startsWith('적합도'))) parts.push(`적합도: ${fmt(row.role_fitness_avg)}`);
+  return parts.slice(0, 3).join(' · ');
+}
+
+function supervisorOwnedAgents(row = {}) {
+  const owned = row.owned_agents || row.managed_agents || row.agents || [];
+  return (owned || []).map((agent) => typeof agent === 'string' ? agent : (agent.agent || agent.name || agent.key || agent.owner_agent || agent.director || agent.suborg)).filter(Boolean);
+}
+
+
+function supervisorManagedItems(row = {}) {
+  const owned = firstNonEmptyList(row.managed_agent_details, row.owned_agent_details, row.owned_agents, row.managed_agents, row.agents);
+  return (owned || []).map((item) => {
+    if (typeof item === 'string') return { key: item };
+    const key = item.agent_name || item.agent || item.name || item.key || item.owner_agent || item.director || item.suborg;
+    return key ? { ...item, key } : null;
+  }).filter(Boolean);
+}
+
+function firstNonEmptyList(...lists) {
+  return lists.find((list) => Array.isArray(list) && list.length) || [];
+}
+
+function supervisorAssignments(row = {}) {
+  return (row.next_cycle_assignments || row.next_actions || row.escalations || []).map((item) => {
+    if (typeof item === 'string') return item;
+    return item.assignment || item.next_action || item.reason || item.title || item.owner_agent || '';
+  }).filter(Boolean);
+}
+
+function renderSupervisorDomainCards(pipe = {}, evalPayload = {}, guardianPayload = {}) {
+  if (!document.getElementById('org-topology')) return;
+  const agentRoleLookup = {};
+  agentStrategyDescriptions(pipe.steps || []).forEach((agent) => {
+    agentRoleLookup[normalizeAgentKey(agent.key)] = agent;
+    agentRoleLookup[normalizeAgentKey(agent.name)] = agent;
+  });
+  const agentStrategyCard = (agent) => {
+    const item = typeof agent === 'string' ? { key: agent } : (agent || {});
+    const key = item.key || item.agent_name || item.agent || item.name || item.owner_agent || item.director || item.suborg;
+    const meta = agentRoleLookup[normalizeAgentKey(key)] || AGENT_STRATEGY_CATALOG[normalizeAgentKey(key)] || {};
+    const name = item.display_name || item.title || meta.name || humanizeAgentName(key);
+    const role = item.role_summary || meta.role || item.domain || '역할 요약 미등록';
+    const strategy = item.description || item.strategy || item.bottleneck || meta.strategy || `${role} 역할을 수행하며 pipeline artifact와 contract를 남긴다.`;
+    const guardrail = item.guardrail || item.guardrails || meta.guardrail || '권한이 명시되지 않은 agent는 proposal/context/validation 출력만 생성하며 추천 승인이나 주문을 직접 수행하지 않는다.';
+    const status = item.status || item.domain_status || meta.status || '-';
+    const lastRun = meta.last_run ? new Date(meta.last_run).toLocaleString() : '';
+    const warnings = (meta.warnings || []).length ? ` · warnings ${(meta.warnings || []).length}` : '';
+    const detail = item.role_fitness_avg != null ? `fitness ${fmt(item.role_fitness_avg)}` : (item.assignment_count != null ? `assignments ${item.assignment_count}` : '');
+    return `<article class="audit-card agent-strategy org-supervisor-agent-card">
+      <div class="audit-card-top"><strong>${name}</strong><span class="badge ${supervisorStatusClass(status)}">${supervisorStatusLabel(status)}</span></div>
+      <div class="audit-sub">${role}${strategy ? `<br>${strategy}` : ''}</div>
+      <div class="audit-foot"><b>가드레일</b>: ${guardrail}${detail ? `<br><small>${detail}</small>` : ''}${lastRun ? `<br><small>latest: ${lastRun}${warnings}</small>` : ''}</div>
+    </article>`;
+  };
+  const supervisors = pipe.domain_supervisors || pipe.research_org_suborg_summary?.domain_supervisors || {};
+  const executive = pipe.executive_director || pipe.executive_director_summary || pipe.domain_supervisors?.executive_director || {};
+  const managementTree = pipe.management_tree || pipe.research_org_suborg_summary?.management_tree || executive.management_tree || {};
+  const executiveManagedAgents = firstNonEmptyList(
+    executive.managed_directors,
+    executive.manages,
+    executive.managed_agents,
+    managementTree.executive_director?.manages,
+    executive.managed_suborgs
+  );
+  const rows = [];
+  if (executive.supervisor || executive.org_status || executive.managed_directors || executive.managed_suborgs) {
+    rows.push(['executive_director', {
+      title: executive.title || 'Executive Director',
+      supervisor: executive.supervisor || 'executive_director',
+      domain_status: executive.org_status || executive.status || executive.contract?.status,
+      owned_agents: executiveManagedAgents,
+      next_cycle_assignments: executive.next_cycle_priorities || executive.escalations || [],
+      summary: executive.architecture_summary || executive.summary
+    }]);
+  }
+  Object.entries(supervisors).forEach(([key, value]) => rows.push([key, value || {}]));
+  if (evalPayload.verdict || guardianPayload.summary) {
+    rows.push(['org_evaluator', {
+      title: 'Org Evaluator / Guardian',
+      supervisor: 'org_evaluator',
+      domain_status: evalPayload.verdict || guardianPayload.contract?.status || 'watch',
+      owned_agents: ['org_evaluator', 'org_improvement_guardian'],
+      next_cycle_assignments: (evalPayload.findings || []).slice(0, 3).map((f) => f.recommendation || f.finding).filter(Boolean),
+      summary: { health_score: evalPayload.health_score, guardian_auto_applied: guardianPayload.summary?.auto_applied_count }
+    }]);
+  }
+  const unique = [];
+  const seen = new Set();
+  rows.forEach(([key, row]) => {
+    const id = row.supervisor || key;
+    if (seen.has(id)) return;
+    seen.add(id);
+    unique.push([key, row]);
+  });
+  const cards = unique.map(([key, row]) => {
+    const status = row.domain_status || row.org_status || row.status || row.contract?.status || 'unknown';
+    const agents = supervisorManagedItems(row);
+    const assignments = supervisorAssignments(row);
+    const managedLabel = key === 'executive_director' ? '관리 supervisor' : '관리 agent';
+    const metrics = row.metrics || row.summary || {};
+    const fitness = row.role_fitness_avg ?? row.metrics?.role_fitness_avg;
+    const metricText = readableSupervisorMetricText(row) || (fitness != null ? `적합도: ${fmt(fitness)}` : '');
+    return `<article class="org-supervisor-card ${supervisorStatusClass(status)}">
+      <div class="org-supervisor-head"><div><strong>${supervisorDomainLabel(key, row)}</strong><span>${row.supervisor || key}</span></div><em>${supervisorStatusLabel(status)}</em></div>
+      <p>${readableSupervisorSummary(row)}</p>
+      <section class="org-supervisor-agents">
+        <div class="org-supervisor-agent-heading"><b>${managedLabel}</b><small>${agents.length || 0}개</small></div>
+        <div class="org-supervisor-agent-list">${agents.map(agentStrategyCard).join('') || '<span>-</span>'}</div>
+      </section>
+      <footer>${metricText || 'contract 대기'}${assignments.length ? `<br>${assignments.slice(0, 2).join('<br>')}` : ''}</footer>
+    </article>`;
   }).join('');
-  const findings = (evalPayload.findings || []).map((f) => `<li><b>${f.area}</b>: ${f.finding}</li>`).join('') || '<li>중요한 조직 이슈 없음</li>';
-  const fundFlow = `<div class="org-flow-note fund-first-flow"><b>Fund-first + context-aware 흐름</b><ol><li>가격/공시/수급 데이터로 추천 후보 universe를 정리</li><li>Fund는 고정 전략이 아니라 성향/위험한도에 맞는 전략 DNA를 선택</li><li>Audit은 마법 전략 찾기가 아니라 성공/실패 조건과 신뢰 라벨을 생산</li><li>Fund Registry/Evaluator/Risk Guardian이 어떤 fund가 어떤 국면에 강한지 분리</li><li>추천 결과와 paper outcome이 다시 fund/전략 DNA/router를 보정</li></ol></div>`;
-  setHtml('org-topology', `<div class="org-lanes fund-org-lanes">${html}</div>${fundFlow}<div class="org-flow-note"><b>현재 조직 판단</b><ul>${findings}</ul></div>`);
+  setHtml('org-topology', `<div class="org-supervisor-grid">${cards || '<div class="empty-state">Supervisor/domain 상태를 불러오는 중입니다.</div>'}</div>`);
 }
-
-
-
-
 
 function fundStyleDescription(style){
   const m={trend:'중기 추세/이동평균 정렬을 선호',breakout:'고점 돌파와 거래량 확장을 선호',balanced:'추세·변동성·현금비중을 균형 있게 반영',defensive:'현금비중과 낮은 변동성을 우선',mean_reversion:'상승 추세 내 눌림목 회복을 선호',volume_surge:'거래량 급증과 단기 모멘텀을 선호'};
@@ -2061,7 +2290,7 @@ async function renderPrimaryFundConsensus(recommendations={}){
     const marketBySymbol=new Map((marketPacket.items||[]).map(r=>[r.symbol,r]));
     const buyItems=(packet.items||[]).map(x=>Object.assign({}, recBySymbol.get(x.symbol)||{}, x, {market_context:marketBySymbol.get(x.symbol)}));
     const overallItems=(overall?.symbol_consensus||overall?.items||[]).slice(0,10);
-    const section=`<section class="recommendation-section fund-evidence-section"><div class="recommendation-section-head"><div><h3>Fund evidence</h3><p>기존 추천 후보를 대체하지 않고 보정/참고용으로만 표시합니다. 현재 fund universe는 일반 추천/universe를 참조합니다.</p></div><span>${buyItems.length} 신규매수</span></div><details open><summary>최근 fund 신규매수 consensus</summary>${buyItems.map(renderFundConsensusRecommendationCard).join('')}</details>${overallItems.length?`<details><summary>Fund 전체 보유/합의 상위 ${overallItems.length}개</summary><div class="fund-overall-consensus">${overallItems.map(x=>`<span><b>${nameOf(x.symbol)||x.symbol}</b><em>${x.symbol} · votes ${x.votes??'-'} · score ${fmt(x.weighted_score)}</em></span>`).join('')}</div></details>`:''}</section>`;
+    const section=`<section class="recommendation-section fund-evidence-section"><div class="recommendation-section-head"><div><h3>Fund consensus</h3><p>현재 추천 후보의 fund 매수 합의와 보유/가격 합의를 확인합니다.</p></div><span>${buyItems.length} 신규매수</span></div><details open><summary>최근 fund 신규매수 consensus</summary>${buyItems.map(renderFundConsensusRecommendationCard).join('')}</details>${overallItems.length?`<details><summary>Fund 전체 보유/합의 상위 ${overallItems.length}개</summary><div class="fund-overall-consensus">${overallItems.map(x=>`<span><b>${nameOf(x.symbol)||x.symbol}</b><em>${x.symbol} · votes ${x.votes??'-'} · score ${fmt(x.weighted_score)}</em></span>`).join('')}</div></details>`:''}</section>`;
     target.insertAdjacentHTML('beforeend', section);
   }catch(e){ console.warn('fund consensus render failed', e); }
 }
@@ -2387,8 +2616,17 @@ function renderFundPerformancePanel(pipe = {}, recommendations = {}) {
   const health = fundHealthView(pipe);
   const topFund = perf.top_fund || registry.top_fund || priceReplay.summary?.top_fund || null;
   const recItems = sortRecommendations(recommendations.items || []);
-  const boosted = recItems.filter((r) => (r.validation_basis?.fund_style_consensus_boost_total || 0) > 0);
-  const visible = (boosted.length ? boosted : recItems).slice(0, 8);
+  const fundOverlayScore = (r) => {
+    const basis = r.validation_basis || {};
+    const styleBoost = Number(basis.fund_style_consensus_boost_total || 0);
+    const recommendationBoost = Number(basis.fund_recommendation_score_boost || 0);
+    const consensusBoost = Number(basis.fund_consensus_score_boost || 0);
+    const recommendationVotes = Number((basis.fund_recommendation_consensus || {}).buy_fund_count || 0);
+    const styleVotes = Object.values(basis.fund_style_consensus || {}).reduce((sum, v) => sum + Number(v || 0), 0);
+    return styleBoost + recommendationBoost + consensusBoost + recommendationVotes * 0.01 + styleVotes * 0.001;
+  };
+  const fundLinked = recItems.filter((r) => fundOverlayScore(r) > 0);
+  const visible = (fundLinked.length ? fundLinked : recItems).slice(0, 8);
   const styleText = Object.entries(consensus.top_styles || {}).map(([k,v]) => `${k} ${v}`).join(' · ') || (Array.isArray(registry.top_styles) ? registry.top_styles.join(', ') : '-');
   setHtml('fund-performance-summary', `Fund 상태: ${health.label}${health.staleText ? ` (${health.staleText})` : ''}. 종목추천이 1차 목적이고, Fund는 추천 품질을 높이는 평가/선별 엔진입니다. 우세 스타일: ${styleText}.`);
   setHtml('fund-performance-metrics', `
@@ -2398,13 +2636,13 @@ function renderFundPerformancePanel(pipe = {}, recommendations = {}) {
     <div class="metric-card"><div class="metric-label">Candidates</div><div class="metric-value">${perf.candidate_count ?? '-'}</div><div class="metric-label">후보 운용체</div></div>
     <div class="metric-card"><div class="metric-label">Top Fund Return</div><div class="metric-value">${pct(topFund?.return_pct)}</div><div class="metric-label">${topFund?.style || '-'}</div></div>
     <div class="metric-card"><div class="metric-label">Risk Findings</div><div class="metric-value">${risk.finding_count ?? 0}</div><div class="metric-label">guardian</div></div>
-    <div class="metric-card"><div class="metric-label">추천 반영</div><div class="metric-value">${boosted.length}/${recItems.length}</div><div class="metric-label">fund style boost</div></div>
+    <div class="metric-card"><div class="metric-label">추천 반영</div><div class="metric-value">${fundLinked.length}/${recItems.length}</div><div class="metric-label">fund overlay evidence</div></div>
     <div class="metric-card"><div class="metric-label">Price Replay</div><div class="metric-value">${priceReplay.trading_days ?? '-'}</div><div class="metric-label">trading days</div></div>`);
   const cards=[];
   if (topFund) cards.push(`<article class="audit-card good"><div class="audit-card-top"><strong>Top Fund · ${topFund.id || '-'}</strong><span class="badge good">${topFund.tier || 'champion'}</span></div><div class="audit-sub">${topFund.style || '-'} · age ${topFund.age_days ?? '-'}d · generation ${topFund.generation ?? '-'}</div><div class="strategy-metrics"><div><span>Return</span><b>${pct(topFund.return_pct)}</b></div><div><span>MDD</span><b>${pct(topFund.mdd_pct)}</b></div><div><span>Trades</span><b>${topFund.trade_count ?? '-'}</b></div><div><span>Quality</span><b>${fmt(topFund.fund_quality_score)}</b></div></div><div class="audit-foot">source: ${topFund.source || 'price_replay'} · price replay ${priceReplay.trading_days ?? '-'} trading days</div></article>`);
-  cards.push(`<article class="audit-card neutral"><div class="audit-card-top"><strong>Fund → 추천 종목 연결</strong><span class="badge neutral">overlay</span></div><div class="audit-sub">상위 fund 스타일 합의가 추천 점수에 반영된 종목 ${boosted.length}개</div><div class="audit-foot">${visible.map((r) => `<b>${companyNameOf(r)} ${r.symbol}</b>: ${r.recommendation_bucket_label || r.action_label || r.action || '-'} · score ${fmt(r.score)} · fund boost ${fmt(r.validation_basis?.fund_style_consensus_boost_total)}`).join('<br>') || '표시할 추천 후보 없음'}</div></article>`);
+  cards.push(`<article class="audit-card neutral"><div class="audit-card-top"><strong>Fund → 추천 종목 연결</strong><span class="badge neutral">overlay</span></div><div class="audit-sub">상위 fund 신규매수/보유/스타일 합의가 추천 근거에 반영된 종목 ${fundLinked.length}개</div><div class="audit-foot">${visible.map((r) => { const basis = r.validation_basis || {}; const fundRec = basis.fund_recommendation_consensus || {}; const priority = basis.fund_recommendation_priority || {}; const boost = Number(basis.fund_recommendation_score_boost || 0) + Number(basis.fund_consensus_score_boost || 0) + Number(basis.fund_style_consensus_boost_total || 0); return `<b>${companyNameOf(r)} ${r.symbol}</b>: ${r.recommendation_bucket_label || r.action_label || r.action || '-'} · score ${fmt(r.score)} · fund boost ${fmt(boost)} · buy funds ${fundRec.buy_fund_count ?? 0} · rank ${priority.rank ?? '-'}`; }).join('<br>') || '표시할 추천 후보 없음'}</div></article>`);
   const recCards = visible.slice(0,4).map((r,idx)=>renderRecommendationCard(r,idx)).join('');
-  if (recCards) cards.push(`<article class="audit-card neutral fund-linked-recommendations"><div class="audit-card-top"><strong>추천 종목 미리보기</strong><span class="badge neutral">top linked</span></div><div class="recommendation-card-list embedded-recs">${recCards}</div></article>`);
+  if (recCards) cards.push(`<article class="audit-card neutral fund-linked-recommendations"><div class="audit-card-top"><strong>추천 종목 미리보기</strong><span class="badge neutral">fund linked</span></div><div class="recommendation-card-list embedded-recs">${recCards}</div></article>`);
   // Fund cards are rendered by renderFundLeaderboard() as the canonical asset-grid view.
   // Do not write the legacy summary-card view here; it causes a visible flash on refresh.
   renderFundExtendedSummary();
@@ -2453,7 +2691,7 @@ function renderFundOrgSummary(pipe = {}) {
 async function renderFundOrgStaticFallback(pipe = {}) {
   if (pipe.fund_org_summary || !document.getElementById('fund-org-summary')) return;
   try {
-    const fallback = await apiWithStaticFallback('/api/research/fund/org/latest','/static/fund_org_summary_latest.json',null);
+    const fallback = await apiWithStaticFallback('/api/research/fund/org/latest','/static/fund_suborg_summary_latest.json',null) || await apiWithStaticFallback('/api/research/fund/org/latest','/static/fund_org_summary_latest.json',null);
     if (fallback) renderFundOrgSummary(fallback);
   } catch (_) {}
 }
@@ -2571,7 +2809,7 @@ async function load() {
     api('/api/research/stock/latest'),
     Promise.resolve({status:'deprecated', source:'pipeline_snapshot'}),
     api('/api/research/org/orchestrator/latest'),
-    api('/api/research/pipeline/latest'),
+    api('/api/research/pipeline/latest?detail=full'),
     api('/api/research/org/evaluation/latest'),
     api('/api/research/org/improvement-guardian/latest').catch(() => ({status:'not_run'})),
     api('/api/research/integrity/latest').catch(() => ({status:'not_run', summary:{}})),
@@ -2614,6 +2852,7 @@ async function load() {
   const pipe = pipeline.payload || pipeline;
   const integrityPayload = integrity.payload || integrity || {};
   const integritySummary = integrityPayload.summary || {};
+  window.__lastPipelineSnapshot = pipe;
   const orgStepRows = pipe.steps || orch.actions || [];
   const orgFailureCount = orgStepRows.filter((s) => {
     if (['failed', 'failed_required', 'error'].includes(s.status)) return true;
@@ -2646,7 +2885,7 @@ async function load() {
     evalRunAt ? `evaluation ${new Date(evalRunAt).toLocaleString()}` : null,
     guardianRunAtForFreshness ? `guardian ${new Date(guardianRunAtForFreshness).toLocaleString()}` : null,
   ].filter(Boolean).join(' · ');
-  setHtml('org-status-note', `조직 메뉴는 구형 org 파일이 아니라 최신 pipeline snapshot 기준으로 표시합니다. 상태 기준: ok=정상 실행, degraded=실행 완료 + non-blocking 경고, failed_required=추천 신뢰 전 복구 필요. 현재 degraded ${degradedSteps.length}개${missingRoleSteps.length ? ` · 역할요약 누락 ${missingRoleSteps.length}개` : ''}${freshnessBits ? ` · ${freshnessBits}` : ''}.`);
+  setHtml('org-status-note', `<span class="status-chip ${degradedSteps.length ? 'warn' : 'good'}">주의 ${degradedSteps.length}개</span><span class="status-chip ${missingRoleSteps.length ? 'warn' : 'good'}">역할요약 누락 ${missingRoleSteps.length}개</span>${freshnessBits ? `<span class="status-chip info">${freshnessBits}</span>` : ''}<details class="status-help"><summary>상태 기준</summary><p>정상은 최신 pipeline 기준 문제 없음, 주의는 실행 완료 후 non-blocking 경고, 복구 필요는 추천 신뢰 전 조치가 필요한 상태입니다.</p></details>`);
   setHtml('recommendation-audit-metrics', `
     <div class="metric-card verdict ${validationSummary.best?.verdict || recommendationAudit.summary?.best?.verdict || recommendationAudit.summary?.verdict || ''}"><div class="metric-label">신뢰 라벨</div><div class="metric-value">${validationSummary.best?.verdict || recommendationAudit.summary?.best?.verdict || recommendationAudit.summary?.verdict || '-'}</div></div>
     <div class="metric-card"><div class="metric-label">국면 적합</div><div class="metric-value small-text">${recommendationAudit.summary?.best?.best_use || recommendationAudit.summary?.best?.role_label || '-'}</div></div>
@@ -2757,16 +2996,16 @@ async function load() {
   const guardianRunAt = guardianPayload.run_at ? new Date(guardianPayload.run_at).toLocaleString() : '-';
   setHtml('org-evaluation-metrics', `
     <div class="metric-card verdict ${evalPayload.verdict || ''}"><div class="metric-label">판정</div><div class="metric-value">${evalPayload.verdict || '-'}</div></div>
-    <div class="metric-card"><div class="metric-label">Health Score</div><div class="metric-value">${evalPayload.health_score ?? '-'}</div></div>
-    <div class="metric-card"><div class="metric-label">구조 조치</div><div class="metric-value">${orgActionCount}</div><div class="metric-label">action/urgent findings</div></div>
-    <div class="metric-card"><div class="metric-label">관찰</div><div class="metric-value">${orgWatchCount}</div><div class="metric-label">watch findings</div></div>
-    <div class="metric-card"><div class="metric-label">자동처리</div><div class="metric-value">${guardianSummary.auto_applied_count ?? '-'}</div><div class="metric-label">Guardian low-risk</div></div>
-    <div class="metric-card"><div class="metric-label">제안 대기</div><div class="metric-value">${guardianSummary.patch_proposal_count ?? '-'}</div><div class="metric-label">patch proposals</div></div>
-    <div class="metric-card"><div class="metric-label">승인 필요</div><div class="metric-value">${guardianSummary.approval_required_count ?? '-'}</div><div class="metric-label">manual approval</div></div>
+    <div class="metric-card"><div class="metric-label">건강점수</div><div class="metric-value">${evalPayload.health_score ?? '-'}</div></div>
+    <div class="metric-card"><div class="metric-label">구조 조치</div><div class="metric-value">${orgActionCount}</div><div class="metric-label">긴급/조치 findings</div></div>
+    <div class="metric-card"><div class="metric-label">관찰</div><div class="metric-value">${orgWatchCount}</div><div class="metric-label">관찰 findings</div></div>
+    <div class="metric-card"><div class="metric-label">자동처리</div><div class="metric-value">${guardianSummary.auto_applied_count ?? '-'}</div><div class="metric-label">가디언 저위험</div></div>
+    <div class="metric-card"><div class="metric-label">제안 대기</div><div class="metric-value">${guardianSummary.patch_proposal_count ?? '-'}</div><div class="metric-label">패치 제안</div></div>
+    <div class="metric-card"><div class="metric-label">승인 필요</div><div class="metric-value">${guardianSummary.approval_required_count ?? '-'}</div><div class="metric-label">수동 승인</div></div>
     <div class="metric-card"><div class="metric-label">평가 갱신</div><div class="metric-value">${evalPayload.run_at ? new Date(evalPayload.run_at).toLocaleString() : '-'}</div><div class="metric-label">guardian ${guardianRunAt}</div></div>`);
   renderFundOrgSummary(pipe);
   renderFundOrgStaticFallback(pipe);
-  renderOrgTopology(pipe.steps || orch.actions || [], evalPayload);
+  renderSupervisorDomainCards(pipe, evalPayload, guardianPayload);
   renderCards('org-evaluation-cards', evalPayload.findings || [], (row) => {
     const label = row.severity === 'action' || row.severity === 'urgent' ? '조치 권고' : (row.severity === 'watch' ? '관찰 지침' : '상태 메모');
     const sevLabel = orgSeverityLabel(row.severity);

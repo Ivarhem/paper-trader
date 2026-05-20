@@ -15,6 +15,38 @@ from tools.agents.lib.agent_contract import attach_contract
 from tools.agents.lib.runtime import now_utc, read_json, write_json_and_static
 
 
+MANAGEMENT_TREE = {
+    "executive_director": {
+        "domain": "executive_governance",
+        "manages": ["data_steward", "market_context_director", "strategy_director", "fund_director", "recommendation_desk_lead", "governance_director", "suborg_summary"],
+    },
+    "data_steward": {
+        "domain": "data_office",
+        "manages": ["pipeline_smoke_check", "universe_discovery", "common_universe", "daily_price_refresh", "data_quality", "opendart_disclosures", "sec_edgar_disclosures", "market_mover_seed", "investor_flow_seed", "external_mover_validation"],
+    },
+    "market_context_director": {
+        "domain": "market_context_desk",
+        "manages": ["market_context", "market_shock_mover_scout", "supply_close_strength_scout", "theme_spillover_backtest", "market_issue_scout", "market_news_issue_scout", "market_issue_narrative", "next_trade_issue_context", "recommendation_market_context", "market_regime_gate", "market_route_audit", "us_route_eligibility"],
+    },
+    "strategy_director": {
+        "domain": "strategy_research",
+        "manages": ["strategy_generator", "capacity_planner", "simulation_validation_worker", "discovery_validation", "strategy_novelty_pruner", "strategy_lifecycle", "active_strategy_balancer", "strategy_tail_risk_filter", "strategy_success_optimizer", "recommendation_audit", "outcome_attribution", "audit_tail_quarantine_scout", "positive_cohort_scout", "exit_policy_optimizer", "short_horizon_profit_profile", "strategy_context_router", "strategy_context_outcome_ledger", "target_return_adjustment_evaluator"],
+    },
+    "fund_director": {
+        "domain": "fund_research",
+        "manages": ["paper_fund_simulator", "paper_fund_historical_replay", "paper_fund_price_replay", "fund_registry", "fund_performance_evaluator", "fund_risk_guardian", "fund_consensus", "fund_recommendation_consensus"],
+    },
+    "recommendation_desk_lead": {
+        "domain": "recommendation_committee",
+        "manages": ["recommendation_agent", "recommendation_agent_after_disclosure", "recommendation_critic", "portfolio_risk_manager", "market_regime_gate", "investment_committee", "oversold_recovery", "shadow_recommendations", "internal_signal_board", "alpha_fast_lane", "current_recommendation_validation", "committee_performance_ledger", "recommendation_outcome_tracker", "recommendation_funnel", "recommendation_calibration", "supply_weight_evaluator", "investor_flow_outcome_evaluator", "fund_recommendation_consensus"],
+    },
+    "governance_director": {
+        "domain": "governance_office",
+        "manages": ["paper_trader_integrity", "org_evaluator", "org_improvement_guardian", "org_architecture_review", "research_hypothesis", "experiment_spec_compiler", "experiment_planner", "experiment_runner", "evidence_judge", "research_experiment_ledger", "research_org_orchestrator", "experiment_escalation"],
+    },
+}
+
+
 def compact_list(items: list[Any], limit: int = 5) -> list[Any]:
     return items[:limit] if isinstance(items, list) else []
 
@@ -166,6 +198,12 @@ def main() -> None:
     experiment_plan = read_json("/tmp/research_experiment_plan_latest.json")
     experiment_results = read_json("/tmp/research_experiment_results_latest.json")
     experiment_escalation = read_json("/tmp/experiment_escalation_latest.json")
+    data_steward = read_json("/tmp/data_steward_latest.json")
+    market_context_director = read_json("/tmp/market_context_director_latest.json")
+    strategy_director = read_json("/tmp/strategy_director_latest.json")
+    fund_director = read_json("/tmp/fund_director_latest.json")
+    recommendation_desk_lead = read_json("/tmp/recommendation_desk_lead_latest.json")
+    governance_director = read_json("/tmp/governance_director_latest.json")
     queue = build_research_queue(recs, funnel, audit, org_eval)
     attach_contract(
         queue,
@@ -184,7 +222,7 @@ def main() -> None:
     data_summary = {
         "run_at": run_at,
         "suborg": "data_office",
-        "status": (data_quality.get("contract") or {}).get("status") or "unknown",
+        "status": data_steward.get("domain_status") or (price.get("contract") or {}).get("status") or (data_quality.get("contract") or {}).get("status") or "unknown",
         "summary": {
             "universe_item_count": universe.get("item_count"),
             "universe_market_counts": universe.get("market_counts"),
@@ -195,7 +233,8 @@ def main() -> None:
             "kr_disclosure_count": len(disclosures_kr.get("list") or []),
             "us_disclosure_count": len(disclosures_us.get("items") or disclosures_us.get("list") or []),
         },
-        "artifact_refs": {"full": ["/tmp/data_quality_latest.json", "/tmp/daily_price_refresh_latest.json"]},
+        "director": data_steward,
+        "artifact_refs": {"director": "/tmp/data_steward_latest.json", "full": ["/tmp/data_quality_latest.json", "/tmp/daily_price_refresh_latest.json"]},
     }
     strategy_status = (strategy_lifecycle.get("summary") or {}).get("status_counts") or (strategy_lifecycle.get("status_counts") or {})
     best = ((audit.get("summary") or {}).get("best") or {})
@@ -213,9 +252,12 @@ def main() -> None:
             "audit_quality_flags": best.get("quality_flags"),
             "audit_avg_excess_return_pct": best.get("avg_excess_return_pct"),
             "audit_expected_excess_value_pct": best.get("expected_excess_value_pct"),
+            "director_status": strategy_director.get("domain_status"),
+            "director_bottleneck": strategy_director.get("bottleneck"),
         },
         "next_actions": compact_list(((audit.get("contract") or {}).get("next_actions") or []), 5),
-        "artifact_refs": {"compact": "/tmp/audit_status_latest.json", "full_debug": "/tmp/recommendation_audit_full_latest.json"},
+        "director": strategy_director,
+        "artifact_refs": {"director": "/tmp/strategy_director_latest.json", "compact": "/tmp/audit_status_latest.json", "full_debug": "/tmp/recommendation_audit_full_latest.json"},
     }
     market_summary = {
         "run_at": run_at,
@@ -230,19 +272,32 @@ def main() -> None:
             "top_news_issues": ((news_issue.get("summary") or {}).get("top_issues") or [])[:5],
         },
         "authority": "context_opinion_only",
+        "director": market_context_director,
+        "artifact_refs": {"director": "/tmp/market_context_director_latest.json", "full": ["/tmp/market_context_latest.json", "/tmp/market_issue_scout_latest.json", "/tmp/next_trade_issue_context_latest.json"]},
     }
     fund_summary = {
-        "run_at": run_at,
+        "schema": fund_org.get("schema") or "paper_trader.fund_suborg_summary.v1",
+        "run_at": fund_org.get("run_at") or run_at,
+        "source": fund_org.get("source") or "suborg_summary_agent",
         "suborg": "fund_research_desk",
+        "mode": fund_org.get("mode") or "paper_only_fund_research",
+        "real_trading": False,
         "status": fund_org.get("status") or "unknown",
+        "authority": fund_org.get("authority") or "recommendation_overlay_only_no_orders",
         "summary": fund_org.get("summary") or {
             "registry": fund_registry.get("summary"),
             "performance": fund_eval.get("summary"),
             "risk": fund_risk.get("summary"),
             "consensus": fund_consensus.get("summary"),
         },
+        "director": fund_director,
         "component_effectiveness": fund_org.get("component_effectiveness") or [],
-        "authority": "recommendation_overlay_only",
+        "next_actions": fund_org.get("next_actions") or [],
+        "artifact_refs": fund_org.get("artifact_refs") or {
+            "canonical": "/tmp/fund_suborg_summary_latest.json",
+            "legacy_alias": "/tmp/fund_org_summary_latest.json",
+            "full_debug": ["/tmp/fund_registry_latest.json", "/tmp/fund_performance_evaluator_latest.json", "/tmp/fund_risk_guardian_latest.json", "/tmp/fund_consensus_latest.json"],
+        },
     }
     rec_items = recs.get("items") or []
     recommendation_summary = {
@@ -256,8 +311,11 @@ def main() -> None:
             "funnel_summary": funnel.get("summary"),
             "calibration_summary": calibration.get("summary"),
             "outcome_summary": outcomes.get("summary"),
+            "director_status": recommendation_desk_lead.get("domain_status"),
+            "director_bottleneck": recommendation_desk_lead.get("bottleneck"),
             "action_counts": count_by(rec_items, "action"),
         },
+        "director": recommendation_desk_lead,
         "research_queue_ref": "/tmp/research_queue_latest.json",
         "artifact_refs": {"compact": "/tmp/recommendations_status_latest.json", "full_debug": "/tmp/recommendations_latest.json"},
     }
@@ -277,6 +335,8 @@ def main() -> None:
             "experiment_escalation_summary": experiment_escalation.get("summary"),
         },
         "next_actions": compact_list(org_eval.get("next_actions") or [], 5) + compact_list(guardian.get("next_actions") or [], 5),
+        "director": governance_director,
+        "artifact_refs": {"director": "/tmp/governance_director_latest.json", "full": ["/tmp/research_org_evaluation_latest.json", "/tmp/org_architecture_review_latest.json", "/tmp/paper_trader_integrity_latest.json"]},
     }
     suborgs = {
         "data_office": data_summary,
@@ -298,7 +358,16 @@ def main() -> None:
             "paged APIs / DB summaries",
             "full artifacts only for targeted debugging",
         ],
-        "suborgs": {name: {"status": data.get("status"), "mode": data.get("mode"), "summary": data.get("summary"), "artifact_refs": data.get("artifact_refs")} for name, data in suborgs.items()},
+        "suborgs": {name: {"status": data.get("status"), "mode": data.get("mode"), "summary": data.get("summary"), "director": data.get("director"), "artifact_refs": data.get("artifact_refs")} for name, data in suborgs.items()},
+        "management_tree": MANAGEMENT_TREE,
+        "domain_supervisors": {
+            "data_steward": data_steward,
+            "market_context_director": market_context_director,
+            "strategy_director": strategy_director,
+            "fund_director": fund_director,
+            "recommendation_desk_lead": recommendation_desk_lead,
+            "governance_director": governance_director,
+        },
         "research_queue": queue,
         "artifact_refs": {
             "data": "/tmp/data_suborg_summary_latest.json",
@@ -307,6 +376,12 @@ def main() -> None:
             "fund": "/tmp/fund_suborg_summary_latest.json",
             "recommendation": "/tmp/recommendation_suborg_summary_latest.json",
             "governance": "/tmp/governance_suborg_summary_latest.json",
+            "data_steward": "/tmp/data_steward_latest.json",
+            "market_context_director": "/tmp/market_context_director_latest.json",
+            "strategy_director": "/tmp/strategy_director_latest.json",
+            "fund_director": "/tmp/fund_director_latest.json",
+            "recommendation_desk_lead": "/tmp/recommendation_desk_lead_latest.json",
+            "governance_director": "/tmp/governance_director_latest.json",
         },
     }
     warnings = []

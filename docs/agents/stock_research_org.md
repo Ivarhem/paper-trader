@@ -12,7 +12,7 @@
 - Skeptic Agent: 거래 수 부족, buy-and-hold 미달, 과최적화 의심을 공격한다.
 - Risk Manager: drawdown, 공시 veto, 데이터 부족을 기준으로 reject/watch/promote 의견을 낸다.
 - Portfolio Manager: 후보 간 중복/상관/집중 위험을 점검한다. 현재는 skeleton.
-- Adaptive Investment Committee: 5개 평가 성향 pool(`upside_hunter`, `risk_guardian`, `evidence_skeptic`, `balanced_allocator`, `regime_specialist`)로 추천 후보를 평가하고 weight 기반 종합 판단을 낸다.
+- Adaptive Investment Committee: 6개 평가 성향 pool(`upside_hunter`, `risk_guardian`, `evidence_skeptic`, `balanced_allocator`, `regime_specialist`, `research_advocate`)로 추천 후보를 평가하고 weight 기반 종합 판단을 낸다. `upside_hunter`는 매수/상승 근거를 먼저 찾고, `research_advocate`는 신규 가설과 under-validated 후보를 연구 큐로 올린다. `risk_guardian`/`evidence_skeptic`은 paper-buy 승인 게이트를 맡아 연구 지지와 매수 승인을 분리한다.
 - Committee Performance Ledger: 위원회 history와 recommendation history, 가격 DB를 연결해 future paper outcome을 추적한다.
 - Org Evaluator: pipeline/validation/committee 상태를 감시하고 조직 개선 findings를 낸다.
 - Org Improvement Guardian: Org Evaluator findings를 observe/manual_review/approval_required/low-risk auto-apply로 분류하고, 안전한 self-healing만 자동 적용한다.
@@ -71,3 +71,13 @@ This keeps research automation useful without letting it silently change strateg
 ## Historical validation success optimizer
 
 `strategy_success_optimizer_agent.py` is a reader of Simulation Validation Worker history (`recommendation_validation_results`). It does not assess real-trading readiness. Its strictest tier is `high_confidence_historical`: a paper/historical validation grade used to decide whether a strategy can produce candidate-buy-zone research output or should remain watch-only.
+
+## Orchestration operating model
+
+Main Ray should stay the orchestrator/reviewer for repo and operations work. Work
+that may run longer than about two minutes, retry, or touch multiple modules
+should be delegated to a bounded worker/isolated session with explicit file
+ownership and verification gates. Shared status is recorded by
+`scripts/agent_task_state.py` in `state/agent_tasks.json` and
+`/tmp/agent_task_state_latest.json`; see
+`docs/agents/multi_agent_orchestration.md`.

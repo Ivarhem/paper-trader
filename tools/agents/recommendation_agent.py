@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.database import init_db, latest_financial_quality, list_strategy_registry, list_universe_members, latest_investor_flow_for_symbol
 from tools.agents.lib.agent_contract import attach_contract
 from app.symbols import display_name
+from tools.agents.lib.pipeline_context_contracts import compact_recommendation_item, compact_value
 
 HORIZON_DAYS = 20
 TARGET_RETURN_ADJUSTMENT_PCT_POINTS = 1.5  # fallback target-return parameter haircut, paper research only
@@ -59,6 +60,212 @@ def load_fund_consensus() -> dict:
         return json.loads(Path('/tmp/fund_consensus_latest.json').read_text(encoding='utf-8'))
     except Exception:
         return {}
+
+
+def load_fund_recommendation_consensus() -> dict:
+    try:
+        return json.loads(Path('/tmp/fund_recommendation_consensus_latest.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+def fund_recommendation_consensus_for_symbol(symbol: str, packet: dict) -> dict:
+    for row in (packet.get('items') or []):
+        if row.get('symbol') == symbol:
+            return row
+    return {}
+
+def fund_recommendation_seed_rows(limit: int = 30) -> list[dict]:
+    packet = load_fund_recommendation_consensus()
+    rows = sorted(
+        [r for r in (packet.get('items') or []) if r.get('symbol')],
+        key=lambda r: (float(r.get('weighted_score') or 0), int(r.get('buy_fund_count') or 0)),
+        reverse=True,
+    )
+    out = []
+    for idx, row in enumerate(rows[:limit], start=1):
+        enriched = dict(row)
+        enriched['fund_recommendation_rank'] = idx
+        out.append(enriched)
+    return out
+
+def fund_recommendation_seed_symbols(limit: int = 30) -> list[str]:
+    return [str(r.get('symbol')) for r in fund_recommendation_seed_rows(limit)]
+
+def fund_recommendation_priority(symbol: str, limit: int = 40) -> dict:
+    for row in fund_recommendation_seed_rows(limit):
+        if row.get('symbol') == symbol:
+            weighted = float(row.get('weighted_score') or 0)
+            buys = int(row.get('buy_fund_count') or 0)
+            capped_funds = row.get('risk_capped_funds') or []
+            return {
+                'rank': int(row.get('fund_recommendation_rank') or 999),
+                'weighted_score': weighted,
+                'buy_fund_count': buys,
+                'risk_capped_fund_count': len(capped_funds),
+                'risk_capped_funds': capped_funds,
+                'allocation_guardrail': {
+                    'policy': row.get('risk_guardrail_policy') or 'fund risk findings cap consensus weight only',
+                    'risk_capped_funds': capped_funds,
+                    'cap_applied': bool(capped_funds),
+                },
+                'priority_score': round(weighted + buys * 2.0, 2),
+                'primary_review_candidate': True,
+                'policy': 'top_fund_consensus_primary_candidate_committee_reviewed_with_risk_caps',
+            }
+    return {
+        'rank': 999,
+        'weighted_score': 0.0,
+        'buy_fund_count': 0,
+        'priority_score': 0.0,
+        'primary_review_candidate': False,
+        'policy': 'non_fund_consensus_candidate',
+    }
+
+def fund_recommendation_score_boost(row: dict) -> float:
+    if not row:
+        return 0.0
+    weighted = float(row.get('weighted_score') or 0)
+    buys = int(row.get('buy_fund_count') or 0)
+    # Champion-fund consensus should affect ranking, but cannot bypass disclosure,
+    # audit, risk, or committee gates.
+    return round(min(16.0, weighted * 0.10 + min(6.0, buys * 0.45)), 2)
+
+def load_fund_performance_evaluator() -> dict:
+    try:
+        return json.loads(Path('/tmp/fund_performance_evaluator_latest.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+def median_float(values: list) -> float | None:
+    vals = sorted(float(v) for v in values if v is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    if len(vals) % 2:
+        return round(vals[mid], 2)
+    return round((vals[mid - 1] + vals[mid]) / 2, 2)
+
+def fund_price_consensus_for_symbol(symbol: str, fund_rec: dict, perf_packet: dict, close: float | None) -> dict:
+    if not fund_rec:
+        return {}
+    participant_ids = set(fund_rec.get('participating_funds') or [])
+    buy_prices = [d.get('buy_price') for d in (fund_rec.get('fund_details') or []) if d.get('buy_price') is not None]
+    entries = []
+    targets = []
+    stops = []
+    matched_funds = []
+    for fund in (perf_packet.get('evaluations') or []):
+        if participant_ids and fund.get('id') not in participant_ids:
+            continue
+        for holding in (fund.get('holdings') or []):
+            if holding.get('symbol') != symbol:
+                continue
+            matched_funds.append(fund.get('id'))
+            entries.append(holding.get('entry_price'))
+            targets.append(holding.get('target'))
+            stops.append(holding.get('stop'))
+    latest_buy = median_float(buy_prices)
+    entry = latest_buy if latest_buy is not None else median_float(entries)
+    target = median_float(targets)
+    stop = median_float(stops)
+    out = {
+        'policy': 'champion_paper_fund_price_consensus_first_then_committee_review',
+        'source': 'fund_recommendation_consensus_plus_fund_performance_evaluator_holdings',
+        'asof_date': fund_rec.get('asof_date'),
+        'buy_fund_count': int(fund_rec.get('buy_fund_count') or 0),
+        'weighted_score': fund_rec.get('weighted_score'),
+        'matched_holding_count': len(targets),
+        'matched_funds': sorted({x for x in matched_funds if x})[:20],
+        'latest_buy_price_median': latest_buy,
+        'entry_price_median': median_float(entries),
+        'entry_anchor_price': entry,
+        'target_median': target,
+        'stop_median': stop,
+    }
+    if close:
+        out.update({
+            'entry_anchor_vs_analysis_pct': pct(entry, close) if entry else None,
+            'target_upside_pct': pct(target, close) if target else None,
+            'stop_downside_pct': pct(stop, close) if stop else None,
+            'fund_stop_breached': bool(stop and float(close) <= float(stop)),
+            'fund_entry_anchor_above_analysis': bool(entry and float(entry) > float(close)),
+        })
+    return out
+
+def apply_fund_price_consensus(close: float, target_1: float, target_2: float, target_3: float, stop_reference: float, fund_price: dict) -> tuple[float, float, float, float, dict]:
+    if not close or not fund_price:
+        return target_1, target_2, target_3, stop_reference, {'applied': False, 'reason': 'no_fund_price_consensus'}
+    if fund_price.get('fund_stop_breached'):
+        return target_1, target_2, target_3, stop_reference, {
+            'applied': False,
+            'reason': 'fund_consensus_stop_already_breached',
+            'policy': 'stale_or_invalidated_fund_price_consensus_visible_but_not_used_for_targets',
+            'fund_price_consensus': fund_price,
+        }
+    fund_target = fund_price.get('target_median')
+    fund_stop = fund_price.get('stop_median')
+    adjustments = []
+    if fund_target and float(fund_target) > float(close):
+        fund_upside = max((float(fund_target) / float(close) - 1) * 100, 0.0)
+        first_upside = min(fund_upside, max(min(2.0, fund_upside), min(fund_upside * 0.55, 8.0)))
+        old = (target_1, target_2, target_3)
+        target_1 = round(float(close) * (1 + first_upside / 100), 2)
+        target_2 = round(float(fund_target), 2)
+        target_3 = round(max(float(target_3 or 0), float(fund_target)), 2)
+        adjustments.append({'field': 'targets', 'old': old, 'new': (target_1, target_2, target_3), 'fund_target_upside_pct': round(fund_upside, 2), 'first_take_profit_upside_pct': round(first_upside, 2)})
+    if fund_stop and float(fund_stop) < float(close):
+        old_stop = stop_reference
+        stop_reference = round(float(fund_stop), 2)
+        adjustments.append({
+            'field': 'stop_reference',
+            'old': old_stop,
+            'new': stop_reference,
+            'fund_stop_downside_pct': round((float(fund_stop) / float(close) - 1) * 100, 2),
+        })
+    return target_1, target_2, target_3, stop_reference, {
+        'applied': bool(adjustments),
+        'policy': 'fund_price_consensus_sets_entry_anchor_final_target_and_stop_without_bypassing_gates',
+        'adjustments': adjustments,
+        'fund_price_consensus': fund_price,
+    }
+
+def load_audit_market_reality() -> dict:
+    def market_of_local(sym: str) -> str:
+        return 'KR' if str(sym or '').endswith(('.KS','.KQ')) else 'US'
+    def metric(rows: list[dict]) -> dict:
+        if not rows:
+            return {'samples': 0}
+        excess=[float(x.get('excess_return_pct')) for x in rows if x.get('excess_return_pct') is not None]
+        final=[float(x.get('final_return_pct')) for x in rows if x.get('final_return_pct') is not None]
+        bench=[float(x.get('benchmark_return_pct')) for x in rows if x.get('benchmark_return_pct') is not None]
+        excess_sorted=sorted(excess)
+        return {
+            'samples': len(rows),
+            'audited_count': len(rows),
+            'candidate_buy_zone_count': sum(1 for x in rows if x.get('action') == 'candidate_buy_zone'),
+            'avg_final_return_pct': round(sum(final)/len(final), 2) if final else None,
+            'avg_benchmark_return_pct': round(sum(bench)/len(bench), 2) if bench else None,
+            'avg_excess_return_pct': round(sum(excess)/len(excess), 2) if excess else None,
+            'excess_win_rate_pct': round(sum(1 for x in excess if x > 0)/len(excess)*100, 2) if excess else None,
+            'p10_excess_return_pct': round(excess_sorted[max(0, int(len(excess_sorted)*0.1)-1)], 2) if excess_sorted else None,
+            'interpretation': 'full_audit_all_watch_and_candidate_rows_not_selected_recommendation_subset',
+        }
+    for path in ('/tmp/recommendation_audit_full_latest.json', '/tmp/recommendation_audit_latest.json'):
+        try:
+            packet=json.loads(Path(path).read_text(encoding='utf-8'))
+            reality=(packet.get('summary') or {}).get('market_reality') or {}
+            if reality:
+                return reality
+            rows=[x for x in (packet.get('items') or []) if x.get('status') == 'audited']
+            if rows:
+                return {market: metric([x for x in rows if (x.get('market') or market_of_local(x.get('symbol'))) == market]) for market in ('KR','US')}
+        except Exception:
+            continue
+    return {}
+
+def market_reality_for_symbol(symbol: str, packet: dict) -> dict:
+    market='KR' if str(symbol).endswith(('.KS','.KQ')) else 'US'
+    return (packet or {}).get(market) or {}
 
 def fund_consensus_for_symbol(symbol: str, packet: dict) -> dict:
     for row in (packet.get('symbol_consensus') or []):
@@ -113,6 +320,7 @@ def action_label(action: str) -> str:
     return {'candidate_buy_zone':'관심 매수 후보','watch':'관망','avoid':'제외'}.get(action, action)
 
 def logic_label(logic: str) -> str:
+    if logic == 'fund_recommendation_consensus': return '고수익 paper fund 합의'
     if logic == 'balanced_range_v1': return '균형형 박스권 돌파 전략'
     if logic == 'conservative_range_v1': return '보수형 박스권 돌파 전략'
     if logic.startswith('range_grid_'): return '검증형 그리드 전략'
@@ -172,16 +380,28 @@ def _bar_day(value: str):
 def analysis_rows_for_recommendation(rows, symbol: str):
     """Use the latest fully completed daily bar as the analysis price.
 
-    If the newest daily bar is dated today in the market's local calendar, treat it as
-    potentially incomplete/intraday and anchor recommendations to the previous daily
-    close. This keeps paper research on a clear T-1 close -> next-session tracking basis.
+    If the newest daily bar is dated today before the local market close buffer,
+    treat it as potentially incomplete/intraday and anchor recommendations to
+    the previous daily close. After the regular-session close buffer, today's
+    daily bar is the completed close and should be the price anchor.
     """
     if len(rows) < 2:
         return rows, {'analysis_price_policy': 'latest_available_close', 'analysis_price_source': 'regular_session_daily_close', 'includes_pre_after_market': False}
     market_tz = ZoneInfo('Asia/Seoul') if symbol.endswith(('.KS', '.KQ')) else ZoneInfo('America/New_York')
-    today = datetime.now(market_tz).date()
+    now_local = datetime.now(market_tz)
+    today = now_local.date()
     latest_day = _bar_day(rows[-1]['date'])
     if latest_day == today:
+        close_buffer_minutes = 15 * 60 + 40 if symbol.endswith(('.KS', '.KQ')) else 16 * 60 + 15
+        now_minutes = now_local.hour * 60 + now_local.minute
+        if now_minutes >= close_buffer_minutes:
+            return rows, {
+                'analysis_price_policy': 'today_completed_daily_close_after_market_close_buffer',
+                'analysis_price_source': 'regular_session_daily_close',
+                'includes_pre_after_market': False,
+                'market_timezone': str(market_tz),
+                'market_close_buffer_minutes': close_buffer_minutes,
+            }
         return rows[:-1], {
             'analysis_price_policy': 'previous_completed_daily_close',
             'analysis_price_source': 'regular_session_daily_close',
@@ -655,7 +875,7 @@ def symbol_return(rows, days: int) -> float | None:
     return pct(now, base) if base else None
 
 
-def build_recommendation_reason(symbol: str, rows, consensus: int, best: dict, avg_active_excess: float, avg_excess_win: float, positive_symbol_edges: list[dict], market20: float | None, disclosures: dict, upside_1: float | None, downside_stop: float | None) -> str:
+def build_recommendation_reason(symbol: str, rows, consensus: int, best: dict, avg_active_excess: float, avg_excess_win: float, positive_symbol_edges: list[dict], market20: float | None, disclosures: dict, upside_1: float | None, downside_stop: float | None, fund_recommendation_consensus: dict | None = None, fund_price_adjustment: dict | None = None, fund_price_consensus: dict | None = None) -> str:
     name = display_name(symbol)
     r20 = symbol_return(rows, 20)
     r60 = symbol_return(rows, 60)
@@ -668,7 +888,7 @@ def build_recommendation_reason(symbol: str, rows, consensus: int, best: dict, a
         elif spread < -5:
             parts.append(f"20일 상대강도는 벤치마크보다 {abs(spread)}%p 약해 보수적으로 봅니다")
         else:
-            parts.append("20일 흐름은 보조 변수로만 사용하고, 핵심은 검증된 전략 합의와 리스크 필터입니다")
+            parts.append("20일 흐름은 보조 변수로만 사용하고, 핵심은 고수익 paper fund 합의와 리스크 필터입니다")
     elif r20 is not None:
         parts.append("20일 가격 흐름은 보조 변수로만 사용했습니다")
     if r60 is not None and r60 > 15:
@@ -677,14 +897,27 @@ def build_recommendation_reason(symbol: str, rows, consensus: int, best: dict, a
         parts.append(f"60일 흐름은 {r60}%로 약해 반등 확인이 필요합니다")
 
     evidence = []
-    evidence.append(f"active 전략 {consensus}개가 동시에 후보 구간으로 분류")
-    if avg_active_excess is not None:
-        evidence.append(f"상위 신호 평균 초과수익 {avg_active_excess}%는 보조 랭킹 근거로만 반영")
+    if fund_recommendation_consensus:
+        buy_funds = int(fund_recommendation_consensus.get('buy_fund_count') or 0)
+        weighted_score = round(float(fund_recommendation_consensus.get('weighted_score') or 0), 2)
+        evidence.append(f"고수익 paper fund 매수 합의 {buy_funds}표와 가중점수 {weighted_score}")
+        if fund_price_adjustment and fund_price_adjustment.get('applied'):
+            fp = fund_price_consensus or {}
+            evidence.append(f"목표/손절은 fund 보유 가격 합의(target {fp.get('target_median')}, stop {fp.get('stop_median')})를 우선 반영")
+        elif fund_price_consensus and fund_price_consensus.get('fund_stop_breached'):
+            evidence.append("fund stop 이탈로 가격 합의는 무효화하고 관망 기준으로 표시")
+        evidence.append(f"보조 검증 신호 {consensus}개는 후보 검토/리스크 가드레일로만 사용")
+    else:
+        evidence.append(f"active 전략 {consensus}개가 동시에 후보 구간으로 분류")
+        if avg_active_excess is not None:
+            evidence.append(f"상위 신호 평균 초과수익 {avg_active_excess}%는 보조 랭킹 근거로만 반영")
     if positive_symbol_edges:
         best_edge = max(positive_symbol_edges, key=lambda x: x.get('symbol_edge_pct', 0))
         evidence.append(f"이 종목에서 과거 edge가 양수인 전략 {len(positive_symbol_edges)}개(최대 {best_edge.get('symbol_edge_pct')}%)")
-    else:
+    elif not fund_recommendation_consensus:
         evidence.append("아직 이 종목 고유 edge보다는 범용 active 전략 합의에 가까움")
+    else:
+        evidence.append("종목 고유 전략 edge는 보조 확인 대상으로만 유지")
 
     risk = []
     if disclosures.get('high') or disclosures.get('medium'):
@@ -716,7 +949,7 @@ def explain_decision(action: str, confidence: float, consensus: int, disclosures
     if confidence < 60:
         cautions.append({'code':'score_below_buy_gate','label':'매수 후보 점수 미달','detail':f'{confidence} < configured gate'})
     if consensus < 3:
-        cautions.append({'code':'low_strategy_consensus','label':'전략 합의 부족','detail':f'active 신호 {consensus}개'})
+        cautions.append({'code':'low_strategy_consensus','label':'보조 검증 신호 부족','detail':f'보조 신호 {consensus}개'})
     if total_symbol_samples == 0:
         cautions.append({'code':'new_symbol_validation_pending','label':'종목별 검증 대기','detail':'신규/미검증 종목'})
     elif total_symbol_samples < 10:
@@ -755,9 +988,10 @@ def fmt_pct_value(v, suffix='%'):
         return str(v)
 
 
-def build_entry_plan(close: float, target_1: float, stop_reference: float, technical_context: dict | None, action: str) -> dict:
+def build_entry_plan(close: float, target_1: float, stop_reference: float, technical_context: dict | None, action: str, fund_price_consensus: dict | None = None) -> dict:
     """Suggest a paper-research entry price instead of only upside from current price."""
     tech = technical_context or {}
+    fund_price_consensus = fund_price_consensus or {}
     atr_pct = tech.get('atr14_pct')
     try:
         atr_pct = float(atr_pct) if atr_pct is not None else None
@@ -785,6 +1019,24 @@ def build_entry_plan(close: float, target_1: float, stop_reference: float, techn
     acceptable_entry_upper_pct = round(max(0.4, pullback_pct * 0.45), 2)
     acceptable_entry_upper = round(float(close) * (1 - acceptable_entry_upper_pct / 100), 2)
     chase_above_price = round(float(close) * (1 + max(0.6, (atr_pct or 2.0) * 0.25) / 100), 2)
+    fund_entry_anchor = fund_price_consensus.get('entry_anchor_price')
+    fund_entry_applied = False
+    if fund_entry_anchor and not fund_price_consensus.get('fund_stop_breached'):
+        try:
+            fund_entry_anchor = float(fund_entry_anchor)
+            if fund_entry_anchor > 0:
+                target_buy_price = round(min(fund_entry_anchor, float(close)), 2)
+                anchor_gap_pct = pct(fund_entry_anchor, close)
+                acceptable_entry_upper = round(max(target_buy_price, min(float(close), fund_entry_anchor * 1.012)), 2)
+                acceptable_entry_upper_pct = pct(acceptable_entry_upper, close)
+                pullback_pct = round(max(0.0, -float(pct(target_buy_price, close) or 0)), 2)
+                chase_above_price = round(max(chase_above_price, fund_entry_anchor * 1.025), 2)
+                fund_entry_applied = True
+                reasons.insert(0, '고수익 paper fund 실제 매수 합의 가격을 진입 anchor로 사용')
+        except Exception:
+            fund_entry_anchor = None
+    elif fund_price_consensus.get('fund_stop_breached'):
+        reasons.insert(0, '고수익 paper fund 손절 기준을 이미 이탈해 해당 fund 가격 anchor는 무효화')
     target_upside_from_entry = pct(target_1, target_buy_price)
     stop_downside_from_entry = pct(stop_reference, target_buy_price)
     reward_risk = None
@@ -799,6 +1051,9 @@ def build_entry_plan(close: float, target_1: float, stop_reference: float, techn
     else:
         mode = 'watch_entry_only'
         label = '관찰용 목표매입가'
+    if fund_entry_applied:
+        mode = 'fund_consensus_entry_anchor' if action == 'candidate_buy_zone' else 'fund_consensus_watch_entry_anchor'
+        label = 'Fund 합의 기준 매입가'
     return {
         'policy': 'paper_research_target_buy_price_not_order_instruction',
         'mode': mode,
@@ -813,6 +1068,9 @@ def build_entry_plan(close: float, target_1: float, stop_reference: float, techn
         'stop_downside_from_target_buy_pct': stop_downside_from_entry,
         'reward_risk_from_target_buy': reward_risk,
         'stop_reference': stop_reference,
+        'fund_entry_anchor_price': round(fund_entry_anchor, 2) if fund_entry_anchor else None,
+        'fund_price_consensus_applied': bool(fund_entry_applied),
+        'fund_price_consensus': fund_price_consensus if fund_entry_applied else {},
         'reasons': reasons[:6],
         'note': 'paper research 기준가입니다. 실시간 주문/체결 지시가 아니며 다음 완료 일봉에서 재평가합니다.',
     }
@@ -1070,13 +1328,20 @@ def supply_close_plain_text(ctx: dict) -> str:
 
 def investor_flow_plain_text(ctx: dict) -> str:
     if not ctx:
-        return '거래주체 DB seed 없음 · 가격·거래량·종가 위치 proxy만 보조근거로 사용'
+        return '거래주체 seed 없음 - 가격/거래량/종가 위치 proxy만 보조근거로 사용'
+    status=ctx.get('coverage_status')
+    if status == 'us_market_not_applicable':
+        return '거래주체 seed 미적용: 한국 외국인/기관 seed 전용 데이터라 US 종목에는 적용하지 않음'
+    if status == 'kosdaq_seed_ingestion_gap':
+        return '거래주체 seed 공백: 현재 KOSDAQ 외국인/기관 seed 수집 공백으로 가격/거래량 proxy만 사용'
+    if status == 'not_in_current_investor_flow_seed':
+        return '거래주체 seed 밖: 현재 외국인/기관 상위 seed에는 없어서 가격/거래량 proxy만 사용'
     investors=', '.join(ctx.get('investors') or []) or '감지'
     rank=ctx.get('best_rank')
     date=ctx.get('latest_date') or str(ctx.get('captured_at') or '')[:10]
     if ctx.get('db_linked'):
-        return f"거래주체 DB seed 연동: {investors} 관심/순매수 상위 감지" + (f" · best rank {rank}" if rank else '') + (f" · {date}" if date else '') + ' · 정식 순매수 시계열 검증 전까지 약한 보조근거'
-    return f"거래주체 seed: {investors} 감지" + (f" · best rank {rank}" if rank else '') + ' · DB 미저장 seed 보조근거'
+        return f"거래주체 DB seed 연동: {investors} 관심/순매수 상위 감지" + (f" - best rank {rank}" if rank else '') + (f" - {date}" if date else '') + ' - 정식 순매수 시계열 검증 전까지 약한 보조근거'
+    return f"거래주체 seed: {investors} 감지" + (f" - best rank {rank}" if rank else '') + ' - DB 미저장 seed 보조근거'
 
 def latest_mover_context() -> dict:
     out={'seed_by_symbol':{},'shock_by_symbol':{}}
@@ -1138,6 +1403,7 @@ def latest_investor_flow_seed_context() -> dict:
 
 def investor_flow_seed_context_for_symbol(symbol: str, context: dict | None = None, conn=None) -> dict:
     sym=str(symbol).upper().strip()
+    market=market_of(sym)
     db_rows=[]
     if conn is not None:
         try:
@@ -1159,13 +1425,43 @@ def investor_flow_seed_context_for_symbol(symbol: str, context: dict | None = No
     row=(ctx.get('by_symbol') or {}).get(sym) or {}
     if row:
         row=dict(row); row.setdefault('db_linked', False)
-    return row
+        return row
+    if market == 'US':
+        return {'symbol': sym, 'market': market, 'investors': [], 'coverage_status': 'us_market_not_applicable', 'authority': 'kr_investor_flow_seed_only'}
+    if sym.endswith('.KQ'):
+        return {'symbol': sym, 'market': market, 'investors': [], 'coverage_status': 'kosdaq_seed_ingestion_gap', 'authority': 'paper_monitoring_seed_only'}
+    return {'symbol': sym, 'market': market, 'investors': [], 'coverage_status': 'not_in_current_investor_flow_seed', 'authority': 'paper_monitoring_seed_only'}
+
+def investor_flow_weight_multiplier() -> dict:
+    try:
+        packet=json.loads(Path('/tmp/supply_weight_evaluator_latest.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {'multiplier': 1.0, 'source': 'default_no_supply_weight_evaluator'}
+    group=((packet.get('summary') or {}).get('investor_flow_seed') or {}).get('with_investor_flow_seed') or {}
+    gate=group.get('gate') or {}
+    try:
+        multiplier=float(gate.get('suggested_multiplier') or 1.0)
+    except Exception:
+        multiplier=1.0
+    # Keep this bounded: investor-flow is still provisional scraped evidence.
+    multiplier=max(0.75, min(1.10, multiplier))
+    return {
+        'multiplier': multiplier,
+        'decision': gate.get('decision'),
+        'reason': gate.get('reason'),
+        'complete_count': group.get('complete_count'),
+        'avg_excess_return_pct': group.get('avg_excess_return_pct'),
+        'hit_rate_pct': group.get('hit_rate_pct'),
+        'source': 'supply_weight_evaluator_latest',
+    }
 
 def investor_flow_score_adjustment(ctx: dict) -> dict:
     # Provisional/delayed Naver top-list flow: small monitoring boost only.
     if not ctx:
         return {'adjustment': 0.0, 'tier': 'not_available', 'reason': 'not_in_investor_flow_seed'}
     investors=ctx.get('investors') or []
+    if not investors:
+        return {'adjustment': 0.0, 'tier': 'not_available', 'reason': ctx.get('coverage_status') or 'not_in_investor_flow_seed'}
     try: rank=float(ctx.get('best_rank') or 99)
     except Exception: rank=99
     adj=0.4
@@ -1173,8 +1469,10 @@ def investor_flow_score_adjustment(ctx: dict) -> dict:
     if 'institution' in investors: adj += 0.45
     if rank <= 3: adj += 0.35
     elif rank <= 5: adj += 0.2
-    adj=max(0.0, min(1.4, adj))
-    return {'adjustment': round(adj,2), 'tier': 'investor_flow_seed_proxy', 'reason': 'naver_foreign_institution_seed_slight_monitoring_boost_validation_gated', 'investors': investors, 'best_rank': ctx.get('best_rank')}
+    weight=investor_flow_weight_multiplier()
+    raw_adj=max(0.0, min(1.4, adj))
+    adj=max(0.0, min(1.4, raw_adj * float(weight.get('multiplier') or 1.0)))
+    return {'adjustment': round(adj,2), 'raw_adjustment': round(raw_adj,2), 'tier': 'investor_flow_seed_proxy', 'reason': 'naver_foreign_institution_seed_slight_monitoring_boost_validation_gated_outcome_weighted', 'investors': investors, 'best_rank': ctx.get('best_rank'), 'outcome_weight': weight}
 
 def investor_flow_seed_symbols(limit:int=120) -> list[str]:
     ctx=latest_investor_flow_seed_context()
@@ -1226,6 +1524,26 @@ def market_context_for_symbol(symbol: str, context: dict) -> dict:
     best['matches']=[dict(x) for x in matches]
     best['context_score_boost']=boost
     return best
+
+
+def next_trade_issue_context_for_symbol(symbol: str) -> dict:
+    path = Path('/tmp/next_trade_issue_context_latest.json')
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+    row = (data.get('by_symbol') or {}).get(symbol.upper())
+    if not isinstance(row, dict):
+        return {}
+    adjustment = float(row.get('context_score_adjustment') or 0)
+    # This is a pre-trade context nudge, not trade authority.
+    adjustment = max(-8.0, min(3.0, adjustment))
+    out = dict(row)
+    out['context_score_boost'] = adjustment
+    out['authority'] = data.get('authority')
+    return out
 
 def latest_audit_quality_by_logic() -> dict:
     path=ROOT / '/tmp/recommendation_audit_latest.json'
@@ -1422,6 +1740,7 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     mover_context = mover_context_for_symbol(symbol)
     supply_context = supply_close_context_for_symbol(symbol)
     investor_flow_context = investor_flow_seed_context_for_symbol(symbol, conn=conn)
+    market_reality = market_reality_for_symbol(symbol, load_audit_market_reality())
     supply_score_adjustment = supply_close_score_adjustment(supply_context)
     if not supply_context:
         supply_score_adjustment = derived_supply_proxy_adjustment(technical_context)
@@ -1442,7 +1761,14 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     strategy_router=load_strategy_context_router()
     fund_consensus_packet=load_fund_consensus()
     fund_symbol_consensus=fund_consensus_for_symbol(symbol, fund_consensus_packet)
+    fund_recommendation_packet=load_fund_recommendation_consensus()
+    fund_recommendation_consensus=fund_recommendation_consensus_for_symbol(symbol, fund_recommendation_packet)
     fund_style_consensus=(fund_consensus_packet.get('summary') or {}).get('top_styles') or {}
+    regime_context=(strategy_router.get('regime_context') or {}) if isinstance(strategy_router, dict) else {}
+    if fund_recommendation_consensus:
+        fund_style_consensus={**fund_style_consensus}
+        for style, count in (fund_recommendation_consensus.get('fund_styles') or {}).items():
+            fund_style_consensus[style]=float(fund_style_consensus.get(style) or 0) + float(count or 0)
     for strat in active_strategies:
         success_gate = strategy_success_gate(strat['logic'])
         repair_watch_only = False
@@ -1475,6 +1801,13 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
                 # become a buy approval.
                 sig=dict(sig)
                 sig['repair_watch_signal'] = True
+            elif fund_recommendation_consensus:
+                # Top paper-fund consensus now owns first-look candidate generation.
+                # A non-buy technical state is still sent to audit/critic/committee
+                # as review evidence, but downstream gates must keep it watch-only
+                # until validation/risk conditions pass.
+                sig=dict(sig)
+                sig['fund_consensus_review_signal'] = True
             else:
                 continue
         target_adjustment=target_adjustments.get((strat['logic'], symbol_market))
@@ -1519,12 +1852,11 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         router_decision=router_row_for(strat['logic'], strategy_router)
         router_multiplier=float(router_decision.get('score_multiplier') or 1.0)
         router_family=router_decision.get('family')
-        regime_context=(strategy_router.get('regime_context') or {}) if isinstance(strategy_router, dict) else {}
         fund_style_alignment=fund_style_context_alignment(router_family, regime_context.get('regime'), fund_style_consensus)
         fund_style_boost=float(fund_style_alignment.get('boost') or 0)
         if router_decision.get('decision') == 'deprioritize' and fund_style_alignment.get('aligned_with_regime') is False:
             router_multiplier=min(router_multiplier, 0.72)
-        weight=strategy_weight(strat) * (0.25 if repair_watch_only else 1.0) * router_multiplier
+        weight=strategy_weight(strat) * (0.25 if repair_watch_only else (0.45 if sig.get('fund_consensus_review_signal') else 1.0)) * router_multiplier
         q=audit_quality.get(strat['logic'], {})
         q_score=q.get('quality_score')
         q_penalty=0
@@ -1540,10 +1872,12 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         if 'unfavorable_payoff_asymmetry' in q_flags: q_penalty += 2
         if 'recent_decay' in q_flags: q_penalty += 3
         if repair_watch_only: q_penalty += 14
+        if sig.get('fund_consensus_review_signal'):
+            q_penalty += 8
         symbol_edge_component=max(-6, min(6, sym_edge*1.2)) if sym_stats['samples'] >= 5 else 0
         audit_contract_component=float(audit_score_adjustment.get('boost') or 0)
         logic_score=(max(0, sig['score']) + avg_excess*3 + (excess_win-45)*0.55 + symbol_edge_component + sample_bonus + market_edge_bonus + fund_style_boost + audit_contract_component - no_sample_penalty - weak_symbol_penalty - market_edge_penalty - q_penalty) * weight
-        signals.append({'logic':strat['logic'],'score':round(logic_score,2),'raw_score':sig['score'],'target':sig['target'],'stop':sig['stop'],'avg_excess_return_pct':avg_excess,'excess_win_rate_pct':excess_win,'symbol_edge_pct':round(sym_edge,2),'symbol_samples':sym_stats['samples'],'symbol_success_rate_pct':sym_stats['success_rate_pct'],'symbol_edge_bucket':sym_stats['bucket'],'market_profile':market_profile,'market_edge_policy':{'blocked':bool(market_block),'preferred':bool(market_prefer),'penalty':market_edge_penalty,'bonus':market_edge_bonus},'target_policy':target_policy,'strategy_weight':weight,'strategy_tier':'repair_watch_only' if repair_watch_only else ('aggressive_research_active' if weight <= 0.35 else ('high_upside_probation' if weight < 0.5 else ('probationary' if weight < 1 else 'core'))),'strategy_success_gate':success_gate,'payoff_profile':(strat.get('summary') or {}).get('payoff_profile') or {},'indicator_meta':classify_indicator_logic(strat['logic']),'indicator_family':((strat.get('summary') or {}).get('payoff_profile') or {}).get('indicator_family') or classify_indicator_logic(strat['logic']).get('indicator_family'),'indicator_role':((strat.get('summary') or {}).get('payoff_profile') or {}).get('indicator_role') or classify_indicator_logic(strat['logic']).get('indicator_role'),'technical_signal_role':((strat.get('summary') or {}).get('payoff_profile') or {}).get('technical_signal_role'),'position_size_hint':((strat.get('summary') or {}).get('payoff_profile') or {}).get('position_size_hint'),'lookahead_safety':((strat.get('summary') or {}).get('payoff_profile') or {}).get('lookahead_safety'),'audit_quality':q,'audit_quality_penalty':round(q_penalty,2),'audit_quality_score_adjustment':audit_score_adjustment,'strategy_context_router':router_decision,'fund_style_context_alignment':fund_style_alignment,'fund_style_consensus_boost':fund_style_boost,'short_horizon_profile':short_horizon_profile_for_logic(strat['logic'], short_horizon_profiles),'reasons':sig['reasons']})
+        signals.append({'logic':strat['logic'],'score':round(logic_score,2),'raw_score':sig['score'],'target':sig['target'],'stop':sig['stop'],'avg_excess_return_pct':avg_excess,'excess_win_rate_pct':excess_win,'symbol_edge_pct':round(sym_edge,2),'symbol_samples':sym_stats['samples'],'symbol_success_rate_pct':sym_stats['success_rate_pct'],'symbol_edge_bucket':sym_stats['bucket'],'market_profile':market_profile,'market_edge_policy':{'blocked':bool(market_block),'preferred':bool(market_prefer),'penalty':market_edge_penalty,'bonus':market_edge_bonus},'target_policy':target_policy,'strategy_weight':weight,'strategy_tier':'repair_watch_only' if repair_watch_only else ('fund_consensus_review' if sig.get('fund_consensus_review_signal') else ('aggressive_research_active' if weight <= 0.35 else ('high_upside_probation' if weight < 0.5 else ('probationary' if weight < 1 else 'core')))),'fund_consensus_review_signal':bool(sig.get('fund_consensus_review_signal')),'strategy_success_gate':success_gate,'payoff_profile':(strat.get('summary') or {}).get('payoff_profile') or {},'indicator_meta':classify_indicator_logic(strat['logic']),'indicator_family':((strat.get('summary') or {}).get('payoff_profile') or {}).get('indicator_family') or classify_indicator_logic(strat['logic']).get('indicator_family'),'indicator_role':((strat.get('summary') or {}).get('payoff_profile') or {}).get('indicator_role') or classify_indicator_logic(strat['logic']).get('indicator_role'),'technical_signal_role':((strat.get('summary') or {}).get('payoff_profile') or {}).get('technical_signal_role'),'position_size_hint':((strat.get('summary') or {}).get('payoff_profile') or {}).get('position_size_hint'),'lookahead_safety':((strat.get('summary') or {}).get('payoff_profile') or {}).get('lookahead_safety'),'audit_quality':q,'audit_quality_penalty':round(q_penalty,2),'audit_quality_score_adjustment':audit_score_adjustment,'strategy_context_router':router_decision,'fund_style_context_alignment':fund_style_alignment,'fund_style_consensus_boost':fund_style_boost,'short_horizon_profile':short_horizon_profile_for_logic(strat['logic'], short_horizon_profiles),'reasons':sig['reasons']})
     disclosures, penalty=disclosure_penalty(conn, symbol)
     impact = disclosure_impact_summary(conn, symbol)
     if impact:
@@ -1564,6 +1898,61 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         disclosures['high' if corporate_action_risk.get('severity') == 'high' else 'medium'] += corporate_action_risk.get('event_count', 1)
     financial_quality = latest_financial_quality(symbol) if symbol.endswith(('.KS', '.KQ')) else None
     financial_adjustment = float((financial_quality or {}).get('score_adjustment') or 0)
+    next_trade_issue_context = next_trade_issue_context_for_symbol(symbol)
+    issue_context_adjustment = float((next_trade_issue_context or {}).get('context_score_boost') or 0)
+    if fund_recommendation_consensus:
+        fund_weighted = float(fund_recommendation_consensus.get('weighted_score') or 0)
+        fund_buys = int(fund_recommendation_consensus.get('buy_fund_count') or 0)
+        fund_priority_context = fund_recommendation_priority(symbol, 40)
+        fund_signal_score = round(34.0 + min(22.0, fund_weighted * 1.25) + min(10.0, fund_buys * 1.6), 2)
+        signals.append({
+            'logic': 'fund_recommendation_consensus',
+            'score': fund_signal_score,
+            'raw_score': fund_signal_score,
+            'target': round(close * 1.06, 2),
+            'stop': round(close * 0.95, 2),
+            'avg_excess_return_pct': 0.0,
+            'excess_win_rate_pct': 55.0,
+            'symbol_edge_pct': 0.0,
+            'symbol_samples': 0,
+            'symbol_success_rate_pct': None,
+            'symbol_edge_bucket': 'fund_consensus_primary',
+            'market_profile': {},
+            'market_edge_policy': {'blocked': False, 'preferred': False, 'penalty': 0, 'bonus': 0},
+            'target_policy': {'source': 'fund_recommendation_consensus', 'applied': False, 'policy': 'fund_price_consensus_may_override_targets_below'},
+            'strategy_weight': max(2.6, min(5.0, 2.2 + fund_buys * 0.2)),
+            'strategy_tier': 'fund_consensus_primary',
+            'fund_consensus_review_signal': True,
+            'strategy_success_gate': {'recommendation_enabled': True, 'high_confidence_historical': False, 'trade_eligible_strategy': False, 'tier': 'fund_consensus_primary'},
+            'payoff_profile': {'class': 'fund_consensus', 'technical_signal_role': 'none'},
+            'indicator_meta': {'indicator_family': 'fund_consensus', 'indicator_role': 'primary_candidate_source'},
+            'indicator_family': 'fund_consensus',
+            'indicator_role': 'primary_candidate_source',
+            'technical_signal_role': 'none',
+            'position_size_hint': 'small',
+            'lookahead_safety': {'entry_timing': 'next_bar_after_signal_close', 'uses_future_data': False},
+            'audit_quality': {
+                'verdict': 'fund_consensus_review',
+                'quality_score': 62,
+                'quality_flags': [],
+                'role_labels': ['fund_consensus_primary'],
+                'best_use': 'primary_paper_fund_candidate_with_risk_gates',
+                'fund_usage_hint': 'top paper fund buy consensus is the primary source; auxiliary validation signals are secondary guardrails',
+                'trust_axes': {'return_edge': 60, 'confidence': 58, 'tail_safety': 56, 'regime_fit': 55, 'execution_reliability': 55, 'overheat_avoidance': 52, 'consistency': 58},
+            },
+            'audit_quality_penalty': 0.0,
+            'audit_quality_score_adjustment': {'penalty': 0.0, 'boost': 0.0},
+            'strategy_context_router': {'decision': 'fund_consensus_primary', 'family': 'fund_consensus'},
+            'fund_style_context_alignment': fund_style_context_alignment('fund_consensus', regime_context.get('regime'), fund_style_consensus),
+            'fund_style_consensus_boost': 0.0,
+            'short_horizon_profile': {},
+            'fund_recommendation_priority': fund_priority_context,
+            'reasons': [
+                f"top paper fund consensus rank {fund_priority_context.get('rank')}",
+                f"buy funds {fund_buys}, weighted score {round(fund_weighted, 2)}",
+                "auxiliary validation signals are secondary review guardrails, not the primary selector",
+            ],
+        })
     if not signals:
         return None
     signals=sorted(signals,key=lambda x:x['score'],reverse=True)
@@ -1578,17 +1967,77 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     original_target_3=round(max(target_values),2)
     target_parameter_policy=load_target_return_parameter_policy()
     target_return_adjustment_pct_points=abs(float(target_parameter_policy.get('adjustment_pct_points') or -TARGET_RETURN_ADJUSTMENT_PCT_POINTS))
+    market20=current_market_return(conn,symbol)
     def adjusted_target_level(original_target: float) -> float:
         if not close or not original_target:
             return original_target
         original_upside_pct = (float(original_target) / float(close) - 1) * 100
         adjusted_upside_pct = max(original_upside_pct - target_return_adjustment_pct_points, 0.0)
         return round(float(close) * (1 + adjusted_upside_pct / 100), 2)
-    target_1=adjusted_target_level(original_target_1)
+    def first_take_profit_level(original_target: float) -> tuple[float, dict]:
+        if not close or not original_target:
+            return original_target, {'policy': 'first_take_profit_unavailable'}
+        adjusted_final = adjusted_target_level(original_target)
+        adjusted_upside_pct = max((float(adjusted_final) / float(close) - 1) * 100, 0.0)
+        overheated = bool((technical_context or {}).get('overheated_chase_risk')) or (market20 is not None and market20 >= 8)
+        high_volatility = (technical_context or {}).get('atr_bucket') == 'high'
+        if symbol_market == 'KR':
+            cap_pct = 6.0
+            floor_pct = 3.0
+        else:
+            cap_pct = 5.5
+            floor_pct = 2.5
+        posture = 'balanced_partial_profit'
+        if overheated or high_volatility:
+            cap_pct -= 1.0
+            floor_pct -= 0.5
+            posture = 'defensive_partial_profit'
+        elif weighted_consensus >= 3:
+            cap_pct += 1.5
+            posture = 'supported_partial_profit'
+        cap_pct = max(floor_pct, cap_pct)
+        first_upside_pct = min(adjusted_upside_pct, cap_pct)
+        if adjusted_upside_pct >= floor_pct:
+            first_upside_pct = max(floor_pct, first_upside_pct)
+        first_target = round(float(close) * (1 + first_upside_pct / 100), 2)
+        adjusted_mid_target = adjusted_target_level(original_target_2)
+        if adjusted_mid_target:
+            first_target = min(first_target, adjusted_mid_target)
+        return first_target, {
+            'policy': 'partial_profit_cap_before_20d_final_target',
+            'posture': posture,
+            'cap_pct': round(cap_pct, 2),
+            'floor_pct': round(floor_pct, 2),
+            'adjusted_final_upside_pct': round(adjusted_upside_pct, 2),
+            'selected_upside_pct': round(first_upside_pct, 2),
+            'overheated_or_market_hot': bool(overheated),
+            'high_volatility': bool(high_volatility),
+            'reason': '1차실현가는 최종 20거래일 목표가 아니라 부분 실현 기준이므로 과열/변동성에서는 낮은 캡을 적용',
+        }
     target_2=adjusted_target_level(original_target_2)
     target_3=adjusted_target_level(original_target_3)
+    target_1, first_take_profit_policy = first_take_profit_level(original_target_1)
     tight_stop=round(max(s['stop'] for s in signals),2)
-    market20=current_market_return(conn,symbol)
+    fund_price_consensus = fund_price_consensus_for_symbol(symbol, fund_recommendation_consensus, load_fund_performance_evaluator(), close)
+    target_1, target_2, target_3, tight_stop, fund_price_adjustment = apply_fund_price_consensus(close, target_1, target_2, target_3, tight_stop, fund_price_consensus)
+    if fund_price_adjustment.get('applied'):
+        first_take_profit_policy = {
+            **first_take_profit_policy,
+            'fund_price_consensus_applied': True,
+            'fund_price_consensus_policy': fund_price_adjustment.get('policy'),
+            'fund_target_median': fund_price_consensus.get('target_median'),
+            'fund_stop_median': fund_price_consensus.get('stop_median'),
+            'reason': '1차 실현가/최종 목표/손절 기준을 고수익 paper fund 보유 가격 합의에 맞춰 재보정',
+        }
+    if fund_price_adjustment.get('applied'):
+        target_price_source = 'fund_price_consensus'
+        target_price_source_label = '고수익 paper fund 보유 가격 합의'
+    elif fund_price_consensus.get('fund_stop_breached'):
+        target_price_source = 'strategy_price_model_fund_consensus_invalidated'
+        target_price_source_label = '전략 가격 모델 (fund stop 이탈로 fund 가격 합의 제외)'
+    else:
+        target_price_source = 'strategy_price_model'
+        target_price_source_label = '전략 가격 모델'
     top_signals = signals[:5]
     total_symbol_samples=sum(s.get('symbol_samples') or 0 for s in top_signals)
     positive_symbol_edges = [s for s in top_signals if s.get('symbol_edge_pct', 0) > 0]
@@ -1622,8 +2071,10 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
             indicator_guard_flags.append('overheated_momentum_chase_risk')
     policy=recommendation_policy()
     aggressive_org = policy.get('profile') == 'aggressive_growth_research'
-    market_context_boost = float((market_context or {}).get('context_score_boost') or 0) + float((mover_context or {}).get('context_score_boost') or 0)
+    market_context_boost = float((market_context or {}).get('context_score_boost') or 0) + float((mover_context or {}).get('context_score_boost') or 0) + issue_context_adjustment
     fund_consensus_boost = min(8.0, float((fund_symbol_consensus or {}).get('weighted_score') or 0) * 1.2)
+    fund_recommendation_boost = fund_recommendation_score_boost(fund_recommendation_consensus)
+    fund_recommendation_priority_context = fund_recommendation_priority(symbol, 40)
     best_summary = best.get('summary') or best.get('strategy_success_gate') or {}
     strategy_quality_tier = best_summary.get('quality_tier') or best_summary.get('active_tier') or ('tail_risk_limited' if best_summary.get('severe_tail_or_ev_guard') else None) or ('quality_active' if best_summary.get('quality_active') else None) or ('research_active' if (best_summary.get('tier') == 'research_only' or best_summary.get('trade_eligible_strategy') is False) else 'unknown')
     quality_tier_penalty = 0.0
@@ -1631,7 +2082,7 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         quality_tier_penalty = 4.0
     elif strategy_quality_tier == 'tail_risk_limited':
         quality_tier_penalty = 8.0
-    confidence=round(min(100, max(0, 26 + best['score']*0.52 + weighted_consensus*3.5 + symbol_sample_bonus - penalty + financial_adjustment - indicator_risk_penalty + market_context_boost + fund_consensus_boost + float(combined_supply_adjustment.get('adjustment') or 0) - quality_tier_penalty)),2)
+    confidence=round(min(100, max(0, 26 + best['score']*0.52 + weighted_consensus*3.5 + symbol_sample_bonus - penalty + financial_adjustment - indicator_risk_penalty + market_context_boost + fund_consensus_boost + fund_recommendation_boost + float(combined_supply_adjustment.get('adjustment') or 0) - quality_tier_penalty)),2)
     action='watch'
     effective_medium = int(disclosures.get('effective_medium', disclosures.get('medium', 0)) or 0)
     if confidence>=policy['candidate_threshold'] and disclosures['high']==0 and effective_medium<2 and financial_adjustment > -15:
@@ -1688,11 +2139,18 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
 
     avg_active_excess = round(sum(s['avg_excess_return_pct'] for s in top_signals) / len(top_signals), 2)
     avg_excess_win = round(sum(s['excess_win_rate_pct'] for s in top_signals) / len(top_signals), 2)
-    reasons=[
-        f"활성 전략 {consensus}개(가중 합의 {weighted_consensus})가 현재 관심 매수 구간으로 판단",
-        f"상위 전략 평균 초과수익 {avg_active_excess}%는 보조 랭킹 근거로만 반영",
-        f"대표 전략: {logic_label(best['logic'])} · 전략 신뢰/국면 라벨 기준으로 해석",
-    ]
+    if fund_recommendation_consensus:
+        reasons=[
+            f"고수익 paper fund 합의가 1차 선정 근거이며 보조 검증 신호 {consensus}개(가중 {weighted_consensus})는 리스크 확인용으로만 반영",
+            f"보조 신호의 시장 대비 성과 {avg_active_excess}%는 후보 유지/보류 판단의 참고값으로만 사용",
+            f"선정 모델: Fund consensus · 보조 라벨: {logic_label(best['logic'])}",
+        ]
+    else:
+        reasons=[
+            f"활성 전략 {consensus}개(가중 합의 {weighted_consensus})가 현재 관심 매수 구간으로 판단",
+            f"상위 전략 평균 초과수익 {avg_active_excess}%는 보조 랭킹 근거로만 반영",
+            f"대표 전략: {logic_label(best['logic'])} · 전략 신뢰/국면 라벨 기준으로 해석",
+        ]
     if positive_symbol_edges:
         reasons.append(f"종목별 과거 edge 양수 전략 {len(positive_symbol_edges)}개")
     for rr in best.get('reasons', [])[:3]: reasons.append(korean_reason(rr))
@@ -1710,7 +2168,9 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     fund_votes = int((fund_symbol_consensus or {}).get('votes') or (fund_symbol_consensus or {}).get('vote_count') or 0)
     if fund_votes:
         reasons.append(f"Fund evidence 지지 {fund_votes}표 · 가중점수 {round(float((fund_symbol_consensus or {}).get('weighted_score') or 0),2)} · 판단 보조점수 {fund_consensus_boost:+.1f}")
-    elif action == 'candidate_buy_zone':
+    if fund_recommendation_consensus:
+        reasons.append(f"고수익 paper fund 매수 합의 {int(fund_recommendation_consensus.get('buy_fund_count') or 0)}표 · 가중점수 {round(float(fund_recommendation_consensus.get('weighted_score') or 0),2)} · 후보 가중치 {fund_recommendation_boost:+.1f}")
+    elif action == 'candidate_buy_zone' and not fund_votes:
         reasons.append('Fund evidence 지지는 아직 없음 · 단독 차단 사유는 아니지만 추가 확인 대상으로 표시')
     if supply_context:
         supply_adj=float(combined_supply_adjustment.get('adjustment') or 0)
@@ -1724,10 +2184,16 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         risk_notes.append('공시 리스크로 보수적 판단 필요')
     if market20 is not None and market20 < -5:
         risk_notes.append('벤치마크 단기 약세 구간')
+    if market_reality and market_reality.get('avg_excess_return_pct') is not None:
+        avg_market_excess=float(market_reality.get('avg_excess_return_pct') or 0)
+        if avg_market_excess <= 0:
+            risk_notes.append(f"시장 전체 audit 기준 평균 초과수익 {avg_market_excess:.2f}% · 일부 추천/최근 모멘텀 과대해석 금지")
+        else:
+            risk_notes.append(f"시장 전체 audit 기준 평균 초과수익 {avg_market_excess:.2f}% · 표본/꼬리위험 확인 후 해석")
     if strategy_quality_tier in ('research_active','tail_risk_limited'):
-        risk_notes.append(f'전략 품질 티어: {strategy_quality_tier} · tail-risk 개선 전까지 research 가중치 제한')
+        risk_notes.append(f'보조 검증 품질 티어: {strategy_quality_tier} · tail-risk 개선 전까지 research 가중치 제한')
     if any((s.get('strategy_success_gate') or {}).get('severe_tail_or_ev_guard') for s in top_signals):
-        risk_notes.append('수익률 개선 모드: severe tail/negative EV 전략 신호는 repair-watch 전용이며 buy 후보로 승격 금지')
+        risk_notes.append('수익률 개선 모드: severe tail/negative EV 보조 검증 신호는 repair-watch 전용이며 buy 후보로 승격 금지')
     for note in reversed(profit_guard_notes if 'profit_guard_notes' in locals() else []):
         if note not in risk_notes:
             risk_notes.insert(0, note)
@@ -1735,7 +2201,9 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         risk_notes.append(f"금일 mover/shock seed: {mover_context.get('direction')} {mover_context.get('change_pct')}% · {mover_context.get('data_timing')} · 추천/승격은 검증 우선순위에만 반영")
     if fund_votes:
         risk_notes.append(f"Fund evidence는 추천 판단 보조근거로 반영됨: votes {fund_votes}, weighted_score {round(float((fund_symbol_consensus or {}).get('weighted_score') or 0),2)}, boost {fund_consensus_boost:+.1f}")
-    else:
+    if fund_recommendation_consensus:
+        risk_notes.append(f"고수익 paper fund 합의는 후보 universe와 점수에 반영됨: buy_funds {int(fund_recommendation_consensus.get('buy_fund_count') or 0)}, weighted_score {round(float(fund_recommendation_consensus.get('weighted_score') or 0),2)}, boost {fund_recommendation_boost:+.1f}; 단 audit/critic/risk/committee 차단은 우회하지 않음")
+    if not fund_votes and not fund_recommendation_consensus:
         risk_notes.append('Fund evidence: 해당 종목 fund consensus 지지 없음/미성숙 · 전략/audit 근거 우선')
     if supply_context:
         risk_notes.append(supply_close_plain_text(supply_context) + ' · 수급/거래주체 evidence를 추천 판단 보조근거로 반영')
@@ -1760,10 +2228,10 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         if technical_context.get('overheated_chase_risk'):
             risk_notes.append(f"단기 과열 추격 리스크: 5일 {technical_context.get('return_5d_pct')}%, 20일 {technical_context.get('return_20d_pct')}%, 20일 고점 근접 {technical_context.get('near_20d_high_pct')}% · 모멘텀 신호는 유지하되 추격매수 감점")
     if consensus < 3:
-        risk_notes.append('전략 합의 수가 낮아 관찰 필요')
+        risk_notes.append('보조 검증 신호 수가 낮아 관찰 필요')
     weak_quality_signals=[s for s in top_signals if (s.get('audit_quality') or {}).get('verdict') != 'pass']
     if weak_quality_signals:
-        risk_notes.append('검증 품질 주의: ' + ', '.join(sorted({logic_label(s['logic']) for s in weak_quality_signals})[:3]))
+        risk_notes.append('보조 검증 품질 주의: ' + ', '.join(sorted({logic_label(s['logic']) for s in weak_quality_signals})[:3]))
     if audit_hard_downgrade_signals:
         risk_notes.insert(0, '관망 이유: 감사 품질 저하 및 평균 초과수익 비양수 전략 포함')
     if corporate_action_risk.get('flagged'):
@@ -1852,10 +2320,11 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     technical_support_signals=[s for s in top_signals if (s.get('payoff_profile') or {}).get('class') in ('asymmetric_alpha','fragile_alpha') or str(s.get('logic','')).startswith('technical_')]
     asymmetric_alpha_signals=[s for s in top_signals if (s.get('payoff_profile') or {}).get('class') == 'asymmetric_alpha']
     aggressive_research_count=sum(1 for s in top_signals if s.get('strategy_tier') == 'aggressive_research_active')
+    fund_consensus_review_candidate = bool(fund_recommendation_consensus)
     research_quality_ok = (
         confidence >= policy['research_candidate_threshold']
         and weighted_consensus >= policy['research_weighted_consensus_min']
-        and (avg_excess_win >= policy['research_excess_win_min'] or audit_contract_supportive)
+        and (avg_excess_win >= policy['research_excess_win_min'] or audit_contract_supportive or fund_consensus_review_candidate)
         and disclosures['high'] == 0
         and effective_medium < 2
         and financial_adjustment > -15
@@ -1879,12 +2348,23 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     watch_reason=explain_decision(action, confidence, consensus, disclosures, financial_quality, market20, total_symbol_samples, positive_symbol_edges, avg_excess_win, upside_1_pct, downside_stop_pct)
     if action == 'watch' and watch_reason.get('primary') and not any(n.startswith('관망 이유:') for n in risk_notes):
         risk_notes.insert(0, '관망 이유: ' + watch_reason['primary'])
-    entry_plan = build_entry_plan(close, target_1, tight_stop, technical_context, action)
+    entry_plan = build_entry_plan(close, target_1, tight_stop, technical_context, action, fund_price_consensus)
     risk_notes.append(
         f"목표매입가 제안: {entry_plan.get('target_buy_price')} 이하 중심, 허용상단 {entry_plan.get('acceptable_entry_upper')}, "
         f"{entry_plan.get('chase_above_price')} 초과 추격 금지 · {entry_plan.get('label')}"
     )
+    if fund_price_adjustment.get('applied'):
+        risk_notes.append(
+            f"가격 기준: 고수익 paper fund 합의 anchor {entry_plan.get('fund_entry_anchor_price')} / "
+            f"target {fund_price_consensus.get('target_median')} / stop {fund_price_consensus.get('stop_median')}을 우선 반영"
+        )
+    elif fund_price_consensus.get('fund_stop_breached'):
+        risk_notes.insert(
+            0,
+            f"관망 이유: 고수익 paper fund 기준 stop {fund_price_consensus.get('stop_median')}을 현재 기준가 {close}가 이미 이탈해 fund 가격 합의는 무효화 상태",
+        )
 
+    recommendation_source_model = 'fund_consensus_primary_committee_reviewed' if fund_consensus_review_candidate else 'strategy_signal_primary_fund_overlay'
     validation_basis={
         'top_signal_count': len(top_signals),
         'weighted_strategy_consensus': weighted_consensus,
@@ -1897,6 +2377,11 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         'positive_symbol_edge_count': len(positive_symbol_edges),
         'symbol_validation_sample_count': total_symbol_samples,
         'benchmark_20d_return_pct': market20,
+        'market_reality': market_reality,
+        'market_audit_avg_excess_return_pct': market_reality.get('avg_excess_return_pct') if market_reality else None,
+        'market_audit_excess_win_rate_pct': market_reality.get('excess_win_rate_pct') if market_reality else None,
+        'market_audit_p10_excess_return_pct': market_reality.get('p10_excess_return_pct') if market_reality else None,
+        'market_audit_sample_count': market_reality.get('audited_count') if market_reality else None,
         'symbol_20d_return_pct': symbol_return(rows, 20),
         'symbol_60d_return_pct': symbol_return(rows, 60),
         'disclosure_high': disclosures['high'],
@@ -1907,6 +2392,9 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         'corporate_action_flagged': corporate_action_risk.get('flagged'),
         'corporate_action_severity': corporate_action_risk.get('severity'),
         'financial_score_adjustment': financial_adjustment,
+        'valuation_score_adjustment': (financial_quality or {}).get('valuation_score_adjustment'),
+        'valuation_policy': (financial_quality or {}).get('valuation_policy'),
+        'valuation_metrics': (financial_quality or {}).get('valuation_metrics'),
         'financial_quality_period': (financial_quality or {}).get('latest_period'),
         'financial_warnings': (financial_quality or {}).get('warnings'),
         'financial_supports': (financial_quality or {}).get('supports'),
@@ -1950,6 +2438,11 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         'target_buy_price': entry_plan.get('target_buy_price'),
         'acceptable_entry_upper': entry_plan.get('acceptable_entry_upper'),
         'chase_above_price': entry_plan.get('chase_above_price'),
+        'first_take_profit_policy': first_take_profit_policy,
+        'target_price_source': target_price_source,
+        'target_price_source_label': target_price_source_label,
+        'fund_price_consensus': fund_price_consensus,
+        'fund_price_adjustment': fund_price_adjustment,
         'market_context': market_context,
         'mover_context': mover_context,
         'supply_close_context': supply_context,
@@ -1959,17 +2452,30 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         'supply_close_base_adjustment_pct': supply_score_adjustment.get('adjustment'),
         'investor_flow_seed_adjustment_pct': investor_flow_adjustment.get('adjustment'),
         'investor_flow_seed_context': investor_flow_context,
-        'investor_flow_status': ('db_persisted_provisional_seed' if (investor_flow_context or {}).get('db_linked') else ((supply_context or {}).get('investor_flow_status') or 'not_available_in_local_db')),
+        'investor_flow_status': ('db_persisted_provisional_seed' if (investor_flow_context or {}).get('db_linked') else ((investor_flow_context or {}).get('coverage_status') or (supply_context or {}).get('investor_flow_status') or 'not_available_in_local_db')),
         'market_context_score_boost': market_context_boost,
+        'next_trade_issue_context': next_trade_issue_context,
+        'next_trade_issue_context_adjustment': issue_context_adjustment,
         'fund_consensus': fund_symbol_consensus,
+        'fund_recommendation_consensus': fund_recommendation_consensus,
         'fund_style_consensus': fund_style_consensus,
         'fund_consensus_score_boost': fund_consensus_boost,
+        'fund_recommendation_score_boost': fund_recommendation_boost,
+        'fund_recommendation_priority': fund_recommendation_priority_context,
+        'fund_allocation_guardrail': fund_recommendation_priority_context.get('allocation_guardrail') or {},
+        'fund_consensus_review_candidate': fund_consensus_review_candidate,
+        'recommendation_source_model': recommendation_source_model,
         'fund_style_context_alignment': [s.get('fund_style_context_alignment') for s in top_signals if s.get('fund_style_context_alignment')],
         'fund_style_consensus_boost_total': round(sum(s.get('fund_style_consensus_boost') or 0 for s in top_signals),2),
         'decision_evidence_links': {
-            'fund_evidence_used': bool(fund_symbol_consensus),
+            'fund_evidence_used': bool(fund_symbol_consensus or fund_recommendation_consensus),
             'fund_votes': int((fund_symbol_consensus or {}).get('votes') or (fund_symbol_consensus or {}).get('vote_count') or 0),
             'fund_score_boost': fund_consensus_boost,
+            'fund_recommendation_buy_fund_count': int((fund_recommendation_consensus or {}).get('buy_fund_count') or 0),
+            'fund_recommendation_score_boost': fund_recommendation_boost,
+            'fund_recommendation_priority_score': fund_recommendation_priority_context.get('priority_score'),
+            'fund_recommendation_risk_capped_fund_count': fund_recommendation_priority_context.get('risk_capped_fund_count') or 0,
+            'fund_primary_review_candidate': fund_recommendation_priority_context.get('primary_review_candidate'),
             'supply_evidence_used': bool(supply_context or investor_flow_context),
             'supply_score_boost': combined_supply_adjustment.get('adjustment'),
             'investor_flow_seed_boost': investor_flow_adjustment.get('adjustment'),
@@ -1986,7 +2492,7 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
     validation_basis['regime_fit'] = audit_contract.get('regime_fit') or {}
     validation_basis['fund_fit_reason'] = audit_contract.get('fund_fit_reason')
     grade=confidence_grade(confidence, avg_active_excess, avg_excess_win, total_symbol_samples, len(positive_symbol_edges), disclosures, financial_quality)
-    explanation=build_recommendation_reason(symbol, rows, consensus, best, avg_active_excess, avg_excess_win, positive_symbol_edges, market20, disclosures, upside_1_pct, downside_stop_pct)
+    explanation=build_recommendation_reason(symbol, rows, consensus, best, avg_active_excess, avg_excess_win, positive_symbol_edges, market20, disclosures, upside_1_pct, downside_stop_pct, fund_recommendation_consensus, fund_price_adjustment, fund_price_consensus)
     human_summary=build_human_decision_summary(symbol, action, confidence, grade, watch_reason, validation_basis, risk_notes)
     presentation=build_recommendation_presentation(action, confidence, grade, watch_reason, validation_basis, risk_notes)
     best_logic = best['logic']
@@ -2001,13 +2507,13 @@ def recommend(conn, symbol: str, active_strategies: list[dict], short_horizon_pr
         'target_buy_price':entry_plan.get('target_buy_price'),'acceptable_entry_upper':entry_plan.get('acceptable_entry_upper'),'chase_above_price':entry_plan.get('chase_above_price'),'entry_plan':entry_plan,
         'original_target_1':original_target_1,'original_target_2':original_target_2,'original_target_3':original_target_3,
         'stop_reference':tight_stop,'horizon_days':HORIZON_DAYS,'expected_period':'향후 20거래일 기준',
-        'short_target_policy':short_target_policy,'target_return_adjustment':target_return_adjustment,
+        'short_target_policy':short_target_policy,'target_return_adjustment':target_return_adjustment,'first_take_profit_policy':first_take_profit_policy,'fund_price_consensus':fund_price_consensus,'fund_price_adjustment':fund_price_adjustment,'target_price_source':target_price_source,'target_price_source_label':target_price_source_label,'recommendation_source_model':recommendation_source_model,
         'upside_1_pct':upside_1_pct,'upside_2_pct':upside_2_pct,'upside_3_pct':upside_3_pct,
         'original_upside_1_pct':original_upside_1_pct,'original_upside_2_pct':original_upside_2_pct,'original_upside_3_pct':original_upside_3_pct,
         'downside_stop_pct':downside_stop_pct,
         'strategy_consensus':consensus,'weighted_strategy_consensus':weighted_consensus,
         'logic':best_logic,'strategy_id':best_logic,'source_strategy_id':best_logic,'best_logic':best_logic,'best_logic_label':logic_label(best_logic),'best_logic_hysteresis':hysteresis_note,'market_20d_return_pct':market20,
-        'disclosure_risk':disclosures,'corporate_action_risk':corporate_action_risk,'financial_quality':financial_quality,'watch_reason':watch_reason,'signals':top_signals,'reasons':reasons,'recommendation_reason':explanation,'human_summary':human_summary,'presentation':presentation,'validation_basis':validation_basis,'confidence_grade':grade,'risk_notes':risk_notes,'short_horizon_profile':short_horizon_profile,
+        'disclosure_risk':disclosures,'corporate_action_risk':corporate_action_risk,'financial_quality':financial_quality,'financial_score_adjustment':financial_adjustment,'valuation_score_adjustment':(financial_quality or {}).get('valuation_score_adjustment'),'valuation_metrics':(financial_quality or {}).get('valuation_metrics'),'watch_reason':watch_reason,'signals':top_signals,'reasons':reasons,'recommendation_reason':explanation,'human_summary':human_summary,'presentation':presentation,'validation_basis':validation_basis,'confidence_grade':grade,'risk_notes':risk_notes,'short_horizon_profile':short_horizon_profile,
         'audit_reliability_contract':audit_contract,'audit_reliability_tags':audit_contract.get('labels') or [],'regime_fit':audit_contract.get('regime_fit') or {},'fund_fit_reason':audit_contract.get('fund_fit_reason'),
         'technical_signal_role':validation_basis.get('technical_signal_role'),'indicator_family_counts':validation_basis.get('indicator_family_counts'),'indicator_roles':validation_basis.get('indicator_roles'),'technical_support_signal_count':validation_basis.get('technical_support_signal_count'),'asymmetric_alpha_signal_count':validation_basis.get('asymmetric_alpha_signal_count'),'position_size_hint':validation_basis.get('position_size_hint'),'lookahead_safety':validation_basis.get('lookahead_safety'),'market_context':validation_basis.get('market_context'),'mover_context':validation_basis.get('mover_context'),'technical_risk_context':validation_basis.get('technical_risk_context'),'indicator_risk_penalty':validation_basis.get('indicator_risk_penalty'),'indicator_guard_flags':validation_basis.get('indicator_guard_flags'),
         'caveat':'검증용'
@@ -2021,7 +2527,12 @@ def market_of(symbol: str) -> str:
 
 def recommendation_rank_key(item: dict) -> tuple:
     bucket = 2 if item.get('action') == 'candidate_buy_zone' or item.get('recommendation_bucket') == 'approved' or item.get('trade_eligible') else 1
-    return (bucket, float(item.get('score') or 0), float(item.get('weighted_strategy_consensus') or item.get('strategy_consensus') or 0))
+    vb = item.get('validation_basis') or {}
+    fund_priority = vb.get('fund_recommendation_priority') or {}
+    primary_fund = 1 if fund_priority.get('primary_review_candidate') else 0
+    fund_score = float(fund_priority.get('priority_score') or 0)
+    fund_rank_score = 0 if not primary_fund else max(0, 1000 - int(fund_priority.get('rank') or 999)) / 1000
+    return (bucket, primary_fund, fund_score, fund_rank_score, float(item.get('score') or 0), float(item.get('weighted_strategy_consensus') or item.get('strategy_consensus') or 0))
 
 
 def latest_selected_recommendations(conn: sqlite3.Connection, runs: int = 2) -> dict:
@@ -2232,6 +2743,36 @@ def save_recommendation_history(run_at: str, selected: list[dict]) -> dict:
     }
 
 
+
+
+def export_recommendations_status(packet: dict) -> None:
+    items = packet.get('items') or []
+    changed = packet.get('recommendation_changes') or {}
+    status_packet = {
+        'run_at': packet.get('run_at'),
+        'status': packet.get('status') or ((packet.get('contract') or {}).get('status')) or 'ok',
+        'item_count': len(items),
+        'market_counts': packet.get('market_counts'),
+        'active_strategy_count': packet.get('active_strategy_count'),
+        'effective_strategy_count': packet.get('effective_strategy_count'),
+        'repair_active_strategy_count': packet.get('repair_active_strategy_count'),
+        'fund_recommendation_seed_count': packet.get('fund_recommendation_seed_count'),
+        'fund_recommendation_seed_selected_count': packet.get('fund_recommendation_seed_selected_count'),
+        'bucket_counts': {k: sum(1 for r in items if r.get('recommendation_bucket') == k) for k in ('approved', 'watch', 'research_watch', 'rejected')},
+        'change_summary': {
+            'change_count': changed.get('change_count'),
+            'new_symbols': changed.get('new_symbols') or [],
+            'removed_symbols': changed.get('removed_symbols') or [],
+            'action_changes': compact_value(changed.get('action_changes') or [], list_limit=5, depth=2),
+            'bucket_changes': compact_value(changed.get('bucket_changes') or changed.get('post_committee_bucket_changes') or [], list_limit=8, depth=2),
+        },
+        'quality_notes': compact_value(packet.get('aggregate_quality_notes') or [], list_limit=5, depth=2),
+        'top_items': [compact_recommendation_item(item) for item in items[:20]],
+        'artifact_refs': {'full': {'path': '/tmp/recommendations_latest.json', 'purpose': 'full recommendation cards; prefer compact API/status first'}},
+    }
+    for out in (Path('/tmp/recommendations_status_latest.json'), ROOT / 'static' / 'recommendations_status_latest.json'):
+        out.write_text(json.dumps(status_packet, ensure_ascii=False, indent=2), encoding='utf-8')
+
 def export_recommendation_history_static(latest_changes: dict | None = None, runs: int = 50) -> None:
     conn=sqlite3.connect(get_settings().database_path, timeout=30); conn.row_factory=sqlite3.Row
     ensure_recommendation_history(conn)
@@ -2278,7 +2819,7 @@ def main():
     ap.add_argument('--per-market-limit',type=int,default=10, help='Keep this many recommendations per market so KR/US dropdowns both have candidates')
     ap.add_argument('--output',default='/tmp/recommendations_latest.json')
     args=ap.parse_args(); init_db()
-    active_symbols=sorted(set([m['symbol'] for m in list_universe_members(status='active')] + mover_seed_symbols(120) + investor_flow_seed_symbols(120)))
+    active_symbols=sorted(set([m['symbol'] for m in list_universe_members(status='active')] + mover_seed_symbols(120) + investor_flow_seed_symbols(120) + fund_recommendation_seed_symbols(40)))
     registry_rows=list_strategy_registry()
     strict_active_strategies=[r for r in registry_rows if r['status']=='active']
     repair_lane_strategies=[r for r in registry_rows if r.get('status') in ('repair_active','validation_active')]
@@ -2301,7 +2842,20 @@ def main():
         if r: recs.append(r)
     previous_selected=latest_selected_recommendations(conn)
     conn.close(); recs.sort(key=recommendation_rank_key, reverse=True)
-    selected=top_by_market(recs, args.per_market_limit, previous_selected) if args.per_market_limit else recs[:args.limit]
+    fund_seed_symbols=fund_recommendation_seed_symbols(40)
+    fund_seed_set=set(fund_seed_symbols)
+    if fund_seed_set:
+        # The primary recommendation surface is fund-consensus led. Strategy
+        # candidates still run as guardrail/context evidence, but they should
+        # not fill empty slots on the current user-facing recommendation list.
+        fund_primary_recs=[
+            r for r in recs
+            if r.get('symbol') in fund_seed_set
+            and (r.get('validation_basis') or {}).get('recommendation_source_model') == 'fund_consensus_primary_committee_reviewed'
+        ]
+        selected=top_by_market(fund_primary_recs, args.per_market_limit, previous_selected) if args.per_market_limit else fund_primary_recs[:args.limit]
+    else:
+        selected=top_by_market(recs, args.per_market_limit, previous_selected) if args.per_market_limit else recs[:args.limit]
     run_at=datetime.now(timezone.utc).isoformat()
     recommendation_changes=save_recommendation_history(run_at, selected)
     export_recommendation_history_static(recommendation_changes)
@@ -2318,9 +2872,13 @@ def main():
     aggregate_quality_notes=[]
     if selected and weak_win_count / len(selected) >= 0.8:
         aggregate_quality_notes.append({'code':'weak_excess_win_rate','label':'상위 전략 초과승률이 전반적으로 낮음','detail':f'{weak_win_count}/{len(selected)} selected below 52%; candidate ranking/validation priority에만 반영'})
-    packet={'run_at':run_at,'mode':'검증결과_기반_현재_종목추천','org_profile':org_profile(),'real_trading':False,'active_strategy_count':len(strict_active_strategies),'repair_active_strategy_count':len(repair_lane_strategies),'effective_strategy_count':len(active_strategies),'repair_strategy_mode':repair_strategy_mode,'market_counts':selected_market_counts,'candidate_market_counts':candidate_market_counts,'per_market_limit':args.per_market_limit,'recommendation_changes':recommendation_changes,'aggregate_quality_notes':aggregate_quality_notes,'items':selected}
+    fund_seed_selected_count=sum(1 for x in selected if x.get('symbol') in fund_seed_set)
+    if fund_seed_symbols and fund_seed_selected_count == 0:
+        aggregate_quality_notes.append({'code':'fund_recommendation_seeds_not_selected','label':'고수익 paper fund 후보가 최종 추천 컷에 들지 못함','detail':'fund seeds entered candidate universe and scoring, but no current strategy/review signal survived audit/risk prerequisites'})
+    packet={'run_at':run_at,'mode':'검증결과_기반_현재_종목추천','org_profile':org_profile(),'real_trading':False,'active_strategy_count':len(strict_active_strategies),'repair_active_strategy_count':len(repair_lane_strategies),'effective_strategy_count':len(active_strategies),'repair_strategy_mode':repair_strategy_mode,'market_counts':selected_market_counts,'candidate_market_counts':candidate_market_counts,'fund_recommendation_seed_count':len(fund_seed_symbols),'fund_recommendation_seed_selected_count':fund_seed_selected_count,'per_market_limit':args.per_market_limit,'recommendation_changes':recommendation_changes,'aggregate_quality_notes':aggregate_quality_notes,'items':selected}
     attach_contract(packet, 'recommendation_agent', status=status, inputs={'limit': args.limit, 'per_market_limit': args.per_market_limit}, outputs={'item_count': len(selected), 'market_counts': selected_market_counts, 'candidate_market_counts': candidate_market_counts, 'recommendation_changes': recommendation_changes}, metrics={'active_strategy_count': len(strict_active_strategies), 'repair_active_strategy_count': len(repair_lane_strategies), 'effective_strategy_count': len(active_strategies), 'repair_strategy_mode': repair_strategy_mode, 'candidate_count': len(recs), 'selected_count': len(selected), 'missing_metadata_count': missing_meta, 'recommendation_change_count': recommendation_changes.get('change_count', 0), 'recommendation_bucket_change_count': len(recommendation_changes.get('bucket_changes') or [])}, warnings=warnings, next_actions=['Run strategy lifecycle/balancer before recommendations.'] if not active_strategies else [])
     Path(args.output).write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')
+    export_recommendations_status(packet)
     print(json.dumps(packet,ensure_ascii=False,indent=2))
 
 if __name__=='__main__': main()

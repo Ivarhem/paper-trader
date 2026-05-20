@@ -17,6 +17,10 @@
       "timeout_seconds": 90,
       "failure_mode": "degrade"
     },
+    "external_mover_validation": {
+      "timeout_seconds": 1200,
+      "failure_mode": "degrade"
+    },
     "daily_price_refresh": {
       "timeout_seconds": 240,
       "failure_mode": "degrade"
@@ -70,7 +74,7 @@
       "failure_mode": "degrade"
     },
     "recommendation_agent": {
-      "timeout_seconds": 120,
+      "timeout_seconds": 300,
       "failure_mode": "block"
     },
     "recommendation_critic": {
@@ -166,7 +170,7 @@
       "failure_mode": "degrade"
     },
     "recommendation_agent_after_disclosure": {
-      "timeout_seconds": 120,
+      "timeout_seconds": 300,
       "failure_mode": "block"
     },
     "oversold_recovery": {
@@ -178,6 +182,10 @@
       "failure_mode": "degrade"
     },
     "internal_signal_board": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "alpha_fast_lane": {
       "timeout_seconds": 90,
       "failure_mode": "degrade"
     },
@@ -234,6 +242,10 @@
       "failure_mode": "degrade"
     },
     "supply_weight_evaluator": {
+      "timeout_seconds": 120,
+      "failure_mode": "degrade"
+    },
+    "investor_flow_outcome_evaluator": {
       "timeout_seconds": 120,
       "failure_mode": "degrade"
     },
@@ -324,13 +336,45 @@
     "suborg_summary": {
       "timeout_seconds": 60,
       "failure_mode": "degrade"
+    },
+    "next_trade_issue_context": {
+      "timeout_seconds": 90,
+      "failure_mode": "degrade"
+    },
+    "strategy_director": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "fund_director": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "recommendation_desk_lead": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "executive_director": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "data_steward": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "market_context_director": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
+    },
+    "governance_director": {
+      "timeout_seconds": 60,
+      "failure_mode": "degrade"
     }
   },
   "cadence_policy": {
     "light_15m": [
       "pipeline_smoke_check",
       "data_quality",
-      "validation_capacity_planner",
+      "capacity_planner",
       "recommendation_funnel",
       "experiment_spec_compiler",
       "suborg_summary"
