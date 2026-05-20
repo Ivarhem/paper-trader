@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,9 @@ DEFAULT_LATEST = Path("/tmp/paper_trader_batch_pause_latest.json")
 DEFAULT_STATUS = Path("/tmp/paper_trader_batch_pause_status.json")
 DEFAULT_TTL_SECONDS = 7200
 TASK_STATE = Path("scripts/agent_task_state.py")
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 KNOWN_PROCESS_PATTERNS = [
     "tools/agents/research_pipeline_agent.py",
@@ -94,6 +98,18 @@ def compact(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        from app.database import save_latest_artifact
+
+        save_latest_artifact(
+            path.name.removesuffix(".json"),
+            payload,
+            artifact_path=str(path),
+            status=((payload.get("contract") or {}).get("status") if isinstance(payload.get("contract"), dict) else payload.get("status")),
+            summary=str(payload.get("reason") or payload.get("status") or "")[:1000],
+        )
+    except Exception as exc:
+        payload.setdefault("contract", {}).setdefault("warnings", []).append(f"latest_artifact_db_write_failed: {str(exc)[:180]}")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
