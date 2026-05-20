@@ -2683,10 +2683,9 @@ function renderFundOrgSummary(pipe = {}) {
   const consensus = org.consensus || {};
   const priceReplay = pipe.paper_fund_price_replay_summary || {};
   const health = fundHealthView(pipe);
-  const topFund = perf.top_fund || registry.top_fund || priceReplay.summary?.top_fund || null;
   const topStyles = consensus.top_styles || registry.top_styles || {};
   const sourceCounts = registry.source_counts || {};
-  const hasData = !!(topFund || perf.fund_count || registry.source_counts || priceReplay.summary);
+  const hasData = !!(perf.fund_count || registry.source_counts || priceReplay.summary);
   if (!document.getElementById('fund-org-summary')) return;
   if (!hasData) {
     setHtml('fund-org-summary', '아직 최신 pipeline summary에 fund 조직 데이터가 반영되지 않았습니다. 다음 pipeline run 이후 자동 표시됩니다.');
@@ -2697,7 +2696,7 @@ function renderFundOrgSummary(pipe = {}) {
   const styleText = Array.isArray(topStyles) ? topStyles.join(', ') : Object.entries(topStyles).map(([k,v]) => `${k} ${v}`).join(' · ');
   setHtml('fund-org-summary', `Fund 상태: ${health.label}${health.staleText ? ` (${health.staleText})` : ''}. Fund는 전략 DNA/도구를 묶어 평가하는 엔진이고, 추천은 상위 fund 합의와 risk guardian을 overlay로 사용합니다.${styleText ? ` 현재 우세 스타일: ${styleText}.` : ''}`);
   setHtml('fund-org-metrics', `
-    <div class="metric-card ${health.kind}"><div class="metric-label">Fund 상태</div><div class="metric-value">${health.label}</div><div class="metric-label">대표 ${health.topFund || '-'} · ${pct(health.topReturn)}</div></div>
+    <div class="metric-card ${health.kind}"><div class="metric-label">Fund 상태</div><div class="metric-value">${health.label}</div><div class="metric-label">추천합의 ${health.recConsensus} · risk ${health.riskFindings}</div></div>
     <div class="metric-card"><div class="metric-label">Registered Funds</div><div class="metric-value">${perf.fund_count ?? (Object.values(sourceCounts).reduce((a,b)=>a+(Number(b)||0),0) || '-')}</div><div class="metric-label">${sourceBreakdownText(sourceCounts)}</div></div>
     <div class="metric-card"><div class="metric-label">Champions</div><div class="metric-value">${perf.champion_count ?? '-'}</div><div class="metric-label">quality tier</div></div>
     <div class="metric-card"><div class="metric-label">Candidates</div><div class="metric-value">${perf.candidate_count ?? '-'}</div><div class="metric-label">next allocation pool</div></div>
@@ -2705,9 +2704,13 @@ function renderFundOrgSummary(pipe = {}) {
     <div class="metric-card"><div class="metric-label">Top-Fund Consensus</div><div class="metric-value">${consensus.top_fund_count ?? '-'}</div><div class="metric-label">symbol ${consensus.symbol_consensus_count ?? 0}</div></div>
     <div class="metric-card"><div class="metric-label">Price Replay</div><div class="metric-value">${priceReplay.trading_days ?? '-'}</div><div class="metric-label">trading days</div></div>`);
   const cards = [];
-  if (topFund) cards.push(`<article class="audit-card good"><div class="audit-card-top"><strong>대표 Fund: ${topFund.id || '-'}</strong><span class="badge good">${topFund.tier || 'top'}</span></div><div class="audit-sub">${topFund.style || '-'} · generation ${topFund.generation ?? '-'} · age ${topFund.age_days ?? '-'}d</div><div class="strategy-metrics"><div><span>Return</span><b>${pct(topFund.return_pct)}</b></div><div><span>MDD</span><b>${pct(topFund.mdd_pct)}</b></div><div><span>Trades</span><b>${topFund.trade_count ?? '-'}</b></div><div><span>Quality</span><b>${fmt(topFund.fund_quality_score)}</b></div></div><div class="audit-foot">source: ${topFund.source || 'price_replay'} · target ${pct(topFund.target_pct)} · stop ${pct(topFund.stop_pct)}</div></article>`);
   cards.push(`<article class="audit-card neutral"><div class="audit-card-top"><strong>조직 역할 전환</strong><span class="badge neutral">Fund-first</span></div><div class="audit-sub">Fund Registry → Performance Evaluator → Risk Guardian → Fund Consensus → Recommendation Overlay</div><div class="audit-foot"><b>변경점</b>: active 전략 자체를 관리하기보다, fund의 성향/파라미터/전략 조합을 평가·은퇴·복제합니다.<br><b>위원회</b>: 개별 추천 찬반보다 fund-level risk/allocation guard로 축소.</div></article>`);
-  cards.push(`<article class="audit-card neutral"><div class="audit-card-top"><strong>상위 Fund 스타일 합의</strong><span class="badge neutral">DNA</span></div><div class="audit-sub">${styleText || '아직 style consensus 없음'}</div><div class="audit-foot">추천 엔진은 이 합의를 strategy family boost로 사용합니다. symbol consensus는 live holdings가 충분히 쌓이면 표시됩니다.</div></article>`);
+  if (Number(risk.finding_count || 0) > 0) {
+    cards.push(`<article class="audit-card watch"><div class="audit-card-top"><strong>Fund Risk 점검 필요</strong><span class="badge neutral">Guard</span></div><div class="audit-sub">MDD/회전율/집중도 finding ${risk.finding_count}개가 추천 overlay 가중치에 반영됩니다.</div><div class="audit-foot">대표 fund 성과 카드 대신, 실제 조치가 필요한 risk finding만 조직 메뉴에 노출합니다.</div></article>`);
+  }
+  if (Number(consensus.symbol_consensus_count || 0) > 0 || Number(consensus.top_fund_count || 0) > 0) {
+    cards.push(`<article class="audit-card neutral"><div class="audit-card-top"><strong>추천 Overlay 연결</strong><span class="badge neutral">Consensus</span></div><div class="audit-sub">fund consensus ${consensus.top_fund_count ?? 0}개 · symbol consensus ${consensus.symbol_consensus_count ?? 0}개</div><div class="audit-foot">${styleText ? `<b>우세 스타일</b>: ${styleText}<br>` : ''}Fund 정보는 단독 성과 과시가 아니라 추천 후보 가중치와 risk cap 근거로만 표시합니다.</div></article>`);
+  }
   setHtml('fund-org-cards', cards.join(''));
 }
 
