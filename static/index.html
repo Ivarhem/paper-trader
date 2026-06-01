@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>추천종목 이력</title>
+  <meta name="root-path" content="/paper-trader">
+  <link rel="stylesheet" href="./static/style.css?v=20260505admin2">
+  <style>
+    .history-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.history-toolbar label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:12px}.history-toolbar input,.history-toolbar select{min-width:120px}.history-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.history-table{width:100%;border-collapse:collapse}.history-table th,.history-table td{border-bottom:1px solid var(--line);padding:9px 8px;text-align:left;vertical-align:top}.history-table th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.history-table td{font-size:13px}.score-up{color:#157347}.score-down{color:#b42318}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.reason-cell{max-width:520px;color:var(--muted);line-height:1.35}.pill{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px 8px;background:var(--surface);font-size:12px}.changes-list{display:flex;gap:8px;flex-wrap:wrap}.symbol-link{font-weight:700;color:inherit;cursor:pointer}.symbol-link:hover{text-decoration:underline}@media(max-width:900px){.history-grid{grid-template-columns:1fr 1fr}.history-table{font-size:12px}.reason-cell{max-width:260px}}@media(max-width:620px){.history-grid{grid-template-columns:1fr}.history-table{display:block;overflow-x:auto}}
+  </style>
+</head>
+<body>
+  <div class="app-shell monitor-compact">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Paper Research · No Real Orders</p>
+        <h1>추천종목 이력</h1>
+      </div>
+      <div class="topbar-actions">
+        <a class="button secondary" href="./monitor">Monitor</a>
+        <a class="button admin-button" href="/paper-trader/users">⚙ 사용자 관리</a>
+        <button id="logout-btn" class="secondary">Logout</button>
+        <button id="refresh-btn">Refresh</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel metrics">
+        <div class="section-header"><div><p class="eyebrow">Recommendation History</p><h2>최근 추천 스냅샷 / 변화</h2></div></div>
+        <div class="history-toolbar">
+          <label>Runs <select id="runs"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label>
+          <label>Market <select id="market"><option value="">전체</option><option value="KR">KR</option><option value="US">US</option></select></label>
+          <label>Action <select id="action"><option value="">전체</option><option value="candidate_buy_zone">candidate_buy_zone</option><option value="watch">watch</option><option value="avoid">avoid</option></select></label>
+          <label>Symbol <input id="symbol" placeholder="예: QQQ 또는 005930.KS"></label>
+          <button id="apply-btn" class="secondary">Apply</button>
+        </div>
+      </section>
+
+      <section class="panel metrics"><div class="metric-grid history-grid" id="metrics"></div></section>
+
+      <section class="panel metrics">
+        <div class="section-header"><h2>Latest changes</h2><span class="tag" id="latest-run">-</span></div>
+        <div id="changes" class="changes-list"></div>
+      </section>
+
+      <section class="panel metrics">
+        <div class="section-header"><h2>Symbol summary</h2><span class="tag">최근 run 기준</span></div>
+        <div id="symbol-summary"></div>
+      </section>
+
+      <section class="panel metrics">
+        <div class="section-header"><h2>History rows</h2><span class="tag" id="row-count">-</span></div>
+        <div id="history-table"></div>
+      </section>
+    </main>
+  </div>
+<script>
+const ROOT = document.querySelector('meta[name="root-path"]')?.content || '';
+const $ = (id) => document.getElementById(id);
+function fmtDate(s){ if(!s) return '-'; try{return new Date(s).toLocaleString()}catch{return s} }
+function fmtNum(n,d=2){ return n===null||n===undefined||Number.isNaN(Number(n))?'-':Number(n).toFixed(d) }
+function redirectToLogin(){ location.href=`${ROOT}/login?next=${encodeURIComponent(`${location.pathname.replace(ROOT||'', '')}${location.search||''}` || '/dashboard')}`; }
+async function api(path){ const r=await fetch(`${ROOT}${path}`, {credentials:'same-origin'}); if(r.status===401){redirectToLogin(); throw new Error('로그인이 만료되었습니다. 다시 로그인하세요.');} if(!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); }
+async function loadHistory(q){
+  try {
+    const data = await api(`/api/recommendations/history?${q}`);
+    if ((data.items || []).some(x => x.latest_close === undefined || x.latest_close === null)) {
+      const r = await fetch(`${ROOT}/static/recommendation_history.json?ts=${Date.now()}`, {credentials:'same-origin'});
+      if (r.ok) {
+        const staticData = await r.json();
+        const priceBySymbol = Object.fromEntries((staticData.items || []).filter(x => x.latest_close !== undefined && x.latest_close !== null).map(x => [x.symbol, {latest_close:x.latest_close, latest_price_date:x.latest_price_date}]));
+        data.items = (data.items || []).map(x => ({...x, ...(priceBySymbol[x.symbol] || {})}));
+      }
+    }
+    return data;
+  }
+  catch(e){
+    const r = await fetch(`${ROOT}/static/recommendation_history.json?ts=${Date.now()}`, {credentials:'same-origin'});
+    if(!r.ok) throw e;
+    const data = await r.json();
+    const symbol = $('symbol').value.trim().toUpperCase();
+    const market = $('market').value;
+    const action = $('action').value;
+    if(symbol || market || action){
+      const items = (data.items||[]).filter(x => (!symbol || x.symbol===symbol) && (!market || x.market===market) && (!action || x.action===action));
+      const by = {};
+      items.forEach(item => { const sym=item.symbol; const st=by[sym] ||= {symbol:sym,name:item.name,market:item.market,count:0,latest_score:null,latest_action:null,latest_run_at:null,first_run_at:item.run_at,last_strategy_id:null}; st.count++; st.first_run_at=item.run_at; if(!st.latest_run_at || item.run_at>st.latest_run_at){st.latest_run_at=item.run_at; st.latest_score=item.score; st.latest_action=item.action; st.last_strategy_id=item.strategy_id;} });
+      return {...data, items, by_symbol:Object.values(by), summary:{...data.summary,item_count:items.length,symbol_count:Object.keys(by).length}};
+    }
+    return data;
+  }
+}
+function metric(label,value){ return `<div class="metric-card"><div class="metric-label">${label}</div><div class="metric-value">${value}</div></div>`; }
+function pill(text,cls=''){ return text?`<span class="pill ${cls}">${text}</span>`:''; }
+function renderChanges(ch){
+  if(!ch) return '<p class="hint">아직 변화 데이터가 없습니다.</p>';
+  const parts=[];
+  (ch.new_symbols||[]).forEach(s=>parts.push(pill(`신규 ${s}`)));
+  (ch.removed_symbols||[]).forEach(s=>parts.push(pill(`제외 ${s}`)));
+  (ch.action_changes||[]).forEach(x=>parts.push(pill(`${x.symbol}: ${x.old_action} → ${x.new_action}`)));
+  (ch.score_changes||[]).forEach(x=>parts.push(pill(`${x.symbol}: score ${x.delta>0?'+':''}${x.delta}`, x.delta>0?'score-up':'score-down')));
+  (ch.strategy_changes||[]).forEach(x=>parts.push(pill(`${x.symbol}: ${x.old_strategy_id} → ${x.new_strategy_id}`)));
+  return parts.length ? parts.join(' ') : '<p class="hint">직전 run 대비 의미 있는 변화 없음.</p>';
+}
+function renderSymbolSummary(rows){
+  if(!rows?.length) return '<p class="hint">No symbols.</p>';
+  return `<table class="history-table"><thead><tr><th>Symbol</th><th>Market</th><th>Seen</th><th>Latest</th><th>Action</th><th>Score</th><th>Strategy</th></tr></thead><tbody>${rows.map(r=>`<tr><td><span class="symbol-link" data-symbol="${r.symbol}">${r.symbol}</span><br><span class="hint">${r.name||''}</span></td><td>${r.market||'-'}</td><td>${r.count}</td><td>${fmtDate(r.latest_run_at)}</td><td>${r.latest_action||'-'}</td><td>${fmtNum(r.latest_score)}</td><td class="mono">${r.last_strategy_id||'-'}</td></tr>`).join('')}</tbody></table>`;
+}
+function renderHistory(items){
+  if(!items?.length) return '<p class="hint">No history rows.</p>';
+  return `<table class="history-table"><thead><tr><th>Run</th><th>Symbol</th><th>Market</th><th>Action</th><th>Score</th><th>Strategy</th><th>최근 종가<br><span class="hint">기준일</span></th><th>Target/Stop</th><th>Reason</th></tr></thead><tbody>${items.map(x=>`<tr><td>${fmtDate(x.run_at)}</td><td><b>${x.symbol}</b><br><span class="hint">${x.name||''}</span></td><td>${x.market||'-'}</td><td>${x.action_label||x.action||'-'}<br>${pill(x.confidence_grade||'')}</td><td>${fmtNum(x.score)}</td><td class="mono">${x.strategy_id||'-'}</td><td>${fmtNum(x.latest_close)}<br><span class="hint">${x.latest_price_date||'-'}</span></td><td>${fmtNum(x.target_1)}<br><span class="hint">stop ${fmtNum(x.stop_reference)}</span></td><td class="reason-cell">${x.recommendation_reason||''}</td></tr>`).join('')}</tbody></table>`;
+}
+async function load(){
+  const q=new URLSearchParams();
+  q.set('runs',$('runs').value||20);
+  if($('market').value) q.set('market',$('market').value);
+  if($('action').value) q.set('action',$('action').value);
+  if($('symbol').value.trim()) q.set('symbol',$('symbol').value.trim().toUpperCase());
+  const data=await loadHistory(q);
+  $('metrics').innerHTML = metric('Runs', data.summary.run_count) + metric('Rows', data.summary.item_count) + metric('Symbols', data.summary.symbol_count) + metric('Latest run', fmtDate(data.runs?.[0]));
+  $('latest-run').textContent = data.latest_changes?.previous_run_at ? `prev ${fmtDate(data.latest_changes.previous_run_at)}` : '-';
+  $('changes').innerHTML = renderChanges(data.latest_changes);
+  $('symbol-summary').innerHTML = renderSymbolSummary(data.by_symbol||[]);
+  $('history-table').innerHTML = renderHistory(data.items||[]);
+  $('row-count').textContent = `${data.items?.length||0} rows`;
+  document.querySelectorAll('.symbol-link').forEach(el=>el.addEventListener('click',()=>{ $('symbol').value=el.dataset.symbol; load(); }));
+}
+$('refresh-btn').addEventListener('click', load); $('apply-btn').addEventListener('click', load);
+load().catch(e=>{ $('history-table').innerHTML = `<p class="error">${e.message}</p>`; });
+</script>
+
+<script>
+(function(){const ROOT=document.querySelector('meta[name="root-path"]')?.content||'';const b=document.getElementById('logout-btn');if(b)b.addEventListener('click',async()=>{await fetch(`${ROOT}/api/auth/logout`,{method:'POST'}).catch(()=>{});location.href=`${ROOT}/login`;});})();
+</script>
+<a class="floating-admin-button" href="/paper-trader/users">⚙ 사용자 관리</a>
+</body>
+</html>

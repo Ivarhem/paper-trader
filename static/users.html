@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>사용자 관리 - Paper Trader</title>
+  <meta name="root-path" content="/paper-trader">
+  <link rel="stylesheet" href="./static/style.css?v=20260505admin2">
+</head>
+<body>
+<div class="app-shell monitor-compact">
+  <header class="topbar">
+    <div><p class="eyebrow">Admin</p><h1>사용자 관리</h1></div>
+    <div class="topbar-actions"><a class="button secondary" href="./dashboard">Dashboard</a><a class="button secondary" href="./monitor">Monitor</a><button id="logout-btn" class="secondary">Logout</button></div>
+  </header>
+  <main class="layout">
+    <section class="panel metrics">
+      <div class="section-header"><div><p class="eyebrow">Accounts</p><h2>로그인 계정</h2></div><button id="add-btn">+ 신규 등록</button></div>
+      <p class="hint">관리자는 계정 추가/삭제/비밀번호 초기화를 할 수 있습니다. 자기 자신 삭제는 막혀 있습니다.</p>
+      <div id="users-table"></div>
+    </section>
+  </main>
+</div>
+<dialog id="user-modal" class="modal">
+  <h2 id="modal-title">사용자 등록</h2>
+  <div class="form-grid">
+    <label>아이디 <input id="new-username" autocomplete="off"></label>
+    <label>비밀번호 <input id="new-password" type="password" autocomplete="new-password"></label>
+    <label class="role-check"><input id="new-admin" type="checkbox" checked> 관리자 권한</label>
+  </div>
+  <div class="modal-actions"><button id="cancel-btn" class="secondary">취소</button><button id="save-btn">저장</button></div>
+</dialog>
+<script src="./static/users.js?v=20260508auth1"></script>
+</body>
+</html>
