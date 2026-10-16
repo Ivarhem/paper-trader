@@ -423,3 +423,10 @@ See:
 - `tools/agents/research_pipeline_agent.py` — cron orchestrator
 
 Safety boundary: historical/paper research only; no real trading/orders.
+# Independent news publication acceptance
+
+News-first scouting and narrative enrichment now validate captured candidates
+before updating published artifacts. Failed candidates preserve the last good
+view; run evidence links requirement IDs, Git revision, run ID and packet hash.
+See [the acceptance contract](docs/contracts/news-publication-acceptance.md) for
+offline tests, cancellation/replay commands, deployment requirements and limits.
