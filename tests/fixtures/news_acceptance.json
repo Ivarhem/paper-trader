@@ -1,0 +1,567 @@
+[
+  {
+    "case_id": "normal-01",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-02",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "degraded"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-03",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            },
+            {
+              "title": "확인 보도",
+              "url": "http://example.org/confirmation"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-04",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 2
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        },
+        {
+          "issue_id": "energy",
+          "sources": [
+            {
+              "title": "전력 수요",
+              "url": "https://example.org/energy"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-05",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T00:01:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/overnight",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-06",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-07",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "market_issue_narrative",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "narrative_status": "heuristic_only"
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-08",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "market_issue_narrative",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "narrative_sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ],
+          "narrative_status": "web_supported"
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-09",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15",
+              "retracted": false
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "normal-10",
+    "expected": "pass",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공시 원문: 전망을 하향 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15",
+              "superseded_by": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-01",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": []
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-02",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15",
+              "retracted": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-03",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15",
+              "superseded_by": "https://example.org/new"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-04",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 2
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        },
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-05",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 42
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-06",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": true,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-07",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "failed"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-08",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 0
+      },
+      "issues": []
+    }
+  },
+  {
+    "case_id": "error-09",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "공급 전망 정정",
+              "url": "file:///tmp/pretend-news",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "case_id": "error-10",
+    "expected": "block",
+    "packet": {
+      "run_at": "2026-10-16T09:00:00+09:00",
+      "mode": "news_first_market_issue_scout",
+      "real_trading": false,
+      "contract": {
+        "status": "ok"
+      },
+      "summary": {
+        "issue_count": 1
+      },
+      "issues": [
+        {
+          "issue_id": "semiconductors",
+          "label": "반도체 공급 전망",
+          "sources": [
+            {
+              "title": "",
+              "url": "https://example.org/correction",
+              "published_at": "2026-10-15"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
