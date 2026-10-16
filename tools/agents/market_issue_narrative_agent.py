@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from tools.agents.lib.agent_contract import attach_contract
+from tools.agents.lib.news_publication import begin, publish
 
 def utc_now(): return datetime.now(timezone.utc).isoformat()
 def strip_html(s): return re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',s or '')).strip()
@@ -66,6 +67,8 @@ def main():
     ap.add_argument('--output',default='/tmp/market_issue_narrative_latest.json')
     ap.add_argument('--no-web',action='store_true')
     args=ap.parse_args()
+    publication_run = begin([args.output, args.input])
+    print(f'news publication run_id={publication_run}', file=sys.stderr, flush=True)
     scout=json.loads(Path(args.input).read_text(encoding='utf-8')) if Path(args.input).exists() else {'issues':[]}
     enriched=[]; warnings=[]
     for issue in scout.get('issues') or []:
@@ -95,9 +98,14 @@ def main():
     packet={'run_at':utc_now(),'mode':'market_issue_narrative','real_trading':False,'issues':enriched,'summary':{'issue_count':len(enriched),'web_supported_count':sum(1 for x in enriched if x.get('narrative_status')=='web_supported'),'top_issues':[{'label':x.get('label'),'impact_score':x.get('impact_score'),'narrative_status':x.get('narrative_status'),'narrative':x.get('narrative')} for x in enriched[:5]]}}
     status='ok' if not warnings else 'degraded'
     attach_contract(packet,'market_issue_narrative_agent',status=status,outputs={'issue_count':len(enriched),'web_supported_count':packet['summary']['web_supported_count']},metrics={'issue_count':len(enriched),'warning_count':len(warnings)},warnings=warnings[:10],next_actions=['If heuristic-only narratives dominate, configure a reliable market news source/API.'] if warnings else [])
-    Path(args.output).write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8')
     # Also merge narrative back into scout latest for downstream consumers.
     merged=dict(scout); merged['issues']=enriched; merged['narrative_run_at']=packet['run_at']
-    Path(args.input).write_text(json.dumps(merged,ensure_ascii=False,indent=2),encoding='utf-8')
-    print(json.dumps(packet,ensure_ascii=False,indent=2))
+    # Keep the source packet's price-cluster fields, but validate the enriched
+    # issues using the same narrative contract as the primary output.
+    merged['mode'] = packet['mode']
+    merged['real_trading'] = False
+    merged['contract'] = packet['contract']
+    merged['summary'] = {**(merged.get('summary') or {}), 'issue_count': len(enriched)}
+    result = publish(publication_run, {args.output: packet, args.input: merged})
+    print(json.dumps(result,ensure_ascii=False,indent=2))
 if __name__=='__main__': main()

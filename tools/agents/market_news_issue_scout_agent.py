@@ -9,6 +9,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from app.database import get_settings, init_db
 from tools.agents.lib.agent_contract import attach_contract
+from tools.agents.lib.news_publication import begin, publish
 
 POS=['급등','강세','상승','랠리','신고가','호재','기대감','수혜','상한가','폭등','surge','rally','jumps','soars']
 THEME_WORDS=['증권','금융','반도체','전자','AI','전력','전기','조선','방산','원전','바이오','제약','화학','정유','에너지','은행','보험','건설','자동차','로봇','게임','엔터','철강','코스피','코스닥']
@@ -84,7 +85,9 @@ def extract_theme(text):
  m=re.search(r'([가-힣A-Za-z0-9]{2,12})(?:주|관련주)?(?:\s|·)*(?:급등|강세|상승|랠리|수혜)',text)
  return m.group(1) if m else 'market_news'
 def main():
- ap=argparse.ArgumentParser(); ap.add_argument('--output',default='/tmp/market_news_issue_scout_latest.json'); ap.add_argument('--max-queries',type=int,default=36); args=ap.parse_args(); init_db()
+ ap=argparse.ArgumentParser(); ap.add_argument('--output',default='/tmp/market_news_issue_scout_latest.json'); ap.add_argument('--max-queries',type=int,default=36); args=ap.parse_args()
+ publication_run = begin([args.output])
+ print(f'news publication run_id={publication_run}', file=sys.stderr, flush=True)
  conn=sqlite3.connect(get_settings().database_path); conn.row_factory=sqlite3.Row
  universe=load_universe(conn); name_to_sym={u['name']:u['symbol'] for u in universe if u.get('name')}
  recs=[]
@@ -142,5 +145,6 @@ def main():
  conn.close(); issues=sorted(issues,key=lambda x:(x['confidence'],x['source_count']),reverse=True)[:12]
  packet={'run_at':utc_now(),'mode':'news_first_market_issue_scout','real_trading':False,'issues':issues,'summary':{'issue_count':len(issues),'top_issues':[{'label':x['label'],'confidence':x['confidence'],'source_count':x['source_count'],'confirmed_count':x['price_confirmation'].get('confirmed_count'),'risk':x['risk']} for x in issues[:6]]}}
  attach_contract(packet,'market_news_issue_scout_agent',status='ok' if not warnings else 'degraded',outputs={'issue_count':len(issues),'top_issues':packet['summary']['top_issues']},metrics={'query_count':len(q[:args.max_queries]),'result_count':len(dedup),'issue_count':len(issues)},warnings=warnings[:8],next_actions=['Fuse news-first issues with price/volume scout; use news-only issues as watch/validation priority unless price confirms.'])
- Path(args.output).write_text(json.dumps(packet,ensure_ascii=False,indent=2),encoding='utf-8'); print(json.dumps(packet,ensure_ascii=False,indent=2))
+ result = publish(publication_run, {args.output: packet})
+ print(json.dumps(result,ensure_ascii=False,indent=2))
 if __name__=='__main__': main()
