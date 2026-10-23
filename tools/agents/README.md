@@ -65,5 +65,11 @@ JSON with at least:
 
 ## Design rule
 
+The optional offline `news_evidence_selection_agent.py` separates captured news
+documents from claim-linked analysis context and compares both input forms.
+It is shadow-only and cannot enable itself. See
+[`news-evidence-selection.md`](../../docs/contracts/news-evidence-selection.md)
+for input contracts, historical cutoff rules and the acceptance criteria.
+
 If an agent produces the same caution for nearly every candidate, it should
 promote that to aggregate/org-level guidance instead of noisy per-card blocking.
