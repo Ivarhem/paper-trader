@@ -1,0 +1,331 @@
+{
+  "additional_correction_counterargument_omissions": 0,
+  "case_count": 20,
+  "cases": [
+    {
+      "case_id": "synthetic-01",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14271,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5674,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12309,
+      "selected_input_tokens": 2488
+    },
+    {
+      "case_id": "synthetic-02",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5658,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12298,
+      "selected_input_tokens": 2489
+    },
+    {
+      "case_id": "synthetic-03",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5658,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12305,
+      "selected_input_tokens": 2495
+    },
+    {
+      "case_id": "synthetic-04",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5662,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12299,
+      "selected_input_tokens": 2477
+    },
+    {
+      "case_id": "synthetic-05",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5657,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12290,
+      "selected_input_tokens": 2465
+    },
+    {
+      "case_id": "synthetic-06",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14271,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5678,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12303,
+      "selected_input_tokens": 2486
+    },
+    {
+      "case_id": "synthetic-07",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14271,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5678,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12306,
+      "selected_input_tokens": 2495
+    },
+    {
+      "case_id": "synthetic-08",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5660,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12315,
+      "selected_input_tokens": 2526
+    },
+    {
+      "case_id": "synthetic-09",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5663,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12291,
+      "selected_input_tokens": 2444
+    },
+    {
+      "case_id": "synthetic-10",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5653,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12313,
+      "selected_input_tokens": 2494
+    },
+    {
+      "case_id": "synthetic-11",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5660,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12307,
+      "selected_input_tokens": 2505
+    },
+    {
+      "case_id": "synthetic-12",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5662,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12313,
+      "selected_input_tokens": 2487
+    },
+    {
+      "case_id": "synthetic-13",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5663,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12299,
+      "selected_input_tokens": 2438
+    },
+    {
+      "case_id": "synthetic-14",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5662,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12310,
+      "selected_input_tokens": 2527
+    },
+    {
+      "case_id": "synthetic-15",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5660,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12297,
+      "selected_input_tokens": 2455
+    },
+    {
+      "case_id": "synthetic-16",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5662,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12307,
+      "selected_input_tokens": 2503
+    },
+    {
+      "case_id": "synthetic-17",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5660,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12308,
+      "selected_input_tokens": 2509
+    },
+    {
+      "case_id": "synthetic-18",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14271,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5682,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12307,
+      "selected_input_tokens": 2487
+    },
+    {
+      "case_id": "synthetic-19",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5656,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12298,
+      "selected_input_tokens": 2436
+    },
+    {
+      "case_id": "synthetic-20",
+      "status": "ready_for_comparison",
+      "metrics": {
+        "eligible_document_count": 3,
+        "full_context_chars": 14263,
+        "protected_passage_count": 2,
+        "selected_context_chars": 5658,
+        "selected_passage_count": 11
+      },
+      "required_retention": 1.0,
+      "additional_correction_counterargument_omissions": 0,
+      "full_input_tokens": 12302,
+      "selected_input_tokens": 2497
+    }
+  ],
+  "criteria": {
+    "input_token_reduction_at_least_30pct": true,
+    "no_additional_correction_counterargument_omission": true,
+    "required_evidence_retention_at_least_95pct": true
+  },
+  "decision": "not_eligible",
+  "full_context_chars": 285292,
+  "full_input_tokens": 246077,
+  "implementation_sha256": "edea2fe138dab5b20a8f0dc89b6417bbb8b28dc276a61da0c473dee0523e5a86",
+  "input_sha256": "a1a24048c539a28b7e5ffe929eb49e311e6f1cdc975a559484f71f886446382a",
+  "input_token_reduction": 0.7980185064024675,
+  "mode": "offline_comparison",
+  "note": "This report does not change configuration or publish data; human annotation provenance is declared by the dataset, not authenticated.",
+  "promotion_eligible": false,
+  "real_trading": false,
+  "remaining_gaps": [
+    "historical_cases_not_complete",
+    "human_required_evidence_not_complete"
+  ],
+  "required_evidence_retention": 1.0,
+  "schema": "paper_trader.news_evidence_comparison.v1",
+  "selected_context_chars": 113266,
+  "selected_input_tokens": 49703,
+  "tokenizer": "cl100k_base",
+  "validation_scope": "Synthetic sizing regression only; generated gold, repeated filler, reference tokenizer; no historical or human acceptance."
+}
